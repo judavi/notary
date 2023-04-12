@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"github.com/docker/notary/storage/rethinkdb"
+	"github.com/theupdateframework/notary/storage/rethinkdb"
 )
 
 // These consts are the index names we've defined for RethinkDB
@@ -29,5 +29,19 @@ var (
 			"write_acks": "majority",
 		},
 		JSONUnmarshaller: rdbTUFFileFromJSON,
+	}
+
+	// ChangeRethinkTable is the table definition for changefeed objects
+	ChangeRethinkTable = rethinkdb.Table{
+		Name:       Change{}.TableName(),
+		PrimaryKey: "id",
+		SecondaryIndexes: map[string][]string{
+			"rdb_created_at_id":     {"created_at", "id"},
+			"rdb_gun_created_at_id": {"gun", "created_at", "id"},
+		},
+		Config: map[string]string{
+			"write_acks": "majority",
+		},
+		JSONUnmarshaller: rdbChangeFromJSON,
 	}
 )

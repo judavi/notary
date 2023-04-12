@@ -5,16 +5,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
-	"github.com/Sirupsen/logrus"
-	"github.com/docker/notary"
-	"github.com/docker/notary/passphrase"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/version"
-	homedir "github.com/mitchellh/go-homedir"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/passphrase"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/version"
 )
 
 const (
@@ -62,6 +62,7 @@ type notaryCommander struct {
 	// these are for command line parsing - no need to set
 	debug             bool
 	verbose           bool
+	version           bool
 	trustDir          string
 	configFile        string
 	remoteTrustServer string
@@ -75,12 +76,11 @@ func (n *notaryCommander) parseConfig() (*viper.Viper, error) {
 	n.setVerbosityLevel()
 
 	// Get home directory for current user
-	homeDir, err := homedir.Dir()
-	if err != nil {
-		return nil, fmt.Errorf("cannot get current user home directory: %v", err)
-	}
+	homeDir := os.Getenv(homeEnv)
 	if homeDir == "" {
-		return nil, fmt.Errorf("cannot get current user home directory")
+		logrus.Warn("cannot get current user home directory: environment variable not set")
+		pwd, _ := os.Getwd()
+		logrus.Warnf("notary will use %s to store configuration and keys", filepath.Join(pwd, configDir))
 	}
 
 	config := viper.New()
@@ -130,11 +130,9 @@ func (n *notaryCommander) parseConfig() (*viper.Viper, error) {
 	}
 
 	// Expands all the possible ~/ that have been given, either through -d or config
-	// If there is no error, use it, if not, just attempt to use whatever the user gave us
-	expandedTrustDir, err := homedir.Expand(config.GetString("trust_dir"))
-	if err == nil {
-		config.Set("trust_dir", expandedTrustDir)
-	}
+	// Otherwise just attempt to use whatever the user gave us
+	expandedTrustDir := homeExpand(homeDir, config.GetString("trust_dir"))
+	config.Set("trust_dir", expandedTrustDir)
 	logrus.Debugf("Using the following trust directory: %s", config.GetString("trust_dir"))
 
 	return config, nil
@@ -147,7 +145,13 @@ func (n *notaryCommander) GetCommand() *cobra.Command {
 		Long:          "Notary allows the creation and management of collections of signed targets, allowing the signing and validation of arbitrary content.",
 		SilenceUsage:  true, // we don't want to print out usage for EVERY error
 		SilenceErrors: true, // we do our own error reporting with fatalf
-		Run:           func(cmd *cobra.Command, args []string) { cmd.Usage() },
+		Run: func(cmd *cobra.Command, args []string) {
+			if n.version {
+				fmt.Printf("notary Version: %s, Git commit: %s, Go version: %s\n", version.NotaryVersion, version.GitCommit, runtime.Version())
+				os.Exit(0)
+			}
+			cmd.Usage()
+		},
 	}
 	notaryCmd.SetOutput(os.Stdout)
 	notaryCmd.AddCommand(&cobra.Command{
@@ -155,7 +159,7 @@ func (n *notaryCommander) GetCommand() *cobra.Command {
 		Short: "Print the version number of notary",
 		Long:  "Print the version number of notary",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Printf("notary\n Version:    %s\n Git commit: %s\n", version.NotaryVersion, version.GitCommit)
+			fmt.Printf("notary\n Version:    %s\n Git commit: %s\n Go version: %s\n", version.NotaryVersion, version.GitCommit, runtime.Version())
 		},
 	})
 
@@ -164,6 +168,7 @@ func (n *notaryCommander) GetCommand() *cobra.Command {
 	notaryCmd.PersistentFlags().StringVarP(
 		&n.configFile, "configFile", "c", "", "Path to the configuration file to use")
 	notaryCmd.PersistentFlags().BoolVarP(&n.verbose, "verbose", "v", false, "Verbose output")
+	notaryCmd.Flags().BoolVar(&n.version, "version", false, "Print the version number of notary")
 	notaryCmd.PersistentFlags().BoolVarP(&n.debug, "debug", "D", false, "Debug output")
 	notaryCmd.PersistentFlags().StringVarP(&n.remoteTrustServer, "server", "s", "", "Remote trust server location")
 	notaryCmd.PersistentFlags().StringVar(&n.tlsCAFile, "tlscacert", "", "Trust certs signed only by this CA")
@@ -243,14 +248,14 @@ func getPassphraseRetriever() notary.PassRetriever {
 	}
 }
 
-// Set the logging level to fatal on default, or the most specific level the user specified (debug or error)
+// Set the logging level to warn on default, or the most verbose level the user specified (debug, info)
 func (n *notaryCommander) setVerbosityLevel() {
 	if n.debug {
 		logrus.SetLevel(logrus.DebugLevel)
 	} else if n.verbose {
-		logrus.SetLevel(logrus.ErrorLevel)
+		logrus.SetLevel(logrus.InfoLevel)
 	} else {
-		logrus.SetLevel(logrus.FatalLevel)
+		logrus.SetLevel(logrus.WarnLevel)
 	}
 	logrus.SetOutput(os.Stderr)
 }

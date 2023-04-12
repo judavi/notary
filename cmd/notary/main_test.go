@@ -14,11 +14,11 @@ import (
 	"time"
 
 	"github.com/docker/go-connections/tlsconfig"
-	"github.com/docker/notary"
-	"github.com/docker/notary/passphrase"
-	"github.com/docker/notary/server/storage"
-	"github.com/docker/notary/tuf/data"
 	"github.com/stretchr/testify/require"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/passphrase"
+	"github.com/theupdateframework/notary/server/storage"
+	"github.com/theupdateframework/notary/tuf/data"
 )
 
 // the default location for the config file is in ~/.notary/config.json - even if it doesn't exist.
@@ -114,7 +114,7 @@ func TestInvalidAddHashCommands(t *testing.T) {
 	cmd.SetArgs(append([]string{"-c", configFile, "-d", tempDir}, "addhash", "gun", "test", "10"))
 	err := cmd.Execute()
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "Must specify a GUN, target, byte size of target data, and at least one hash")
+	require.Contains(t, err.Error(), "must specify a GUN, target, byte size of target data, and at least one hash")
 
 	// Invalid byte size given
 	cmd = NewNotaryCommand()
@@ -160,7 +160,7 @@ var exampleValidCommands = []string{
 	"verify repo v1",
 	"key list",
 	"key rotate repo snapshot",
-	"key generate rsa",
+	"key generate ecdsa",
 	"key remove e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 	"key passwd e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 	"key import backup.pem",
@@ -205,7 +205,7 @@ func TestInsufficientArgumentsReturnsErrorAndPrintsUsage(t *testing.T) {
 		cmd.SetOutput(b)
 
 		arglist := strings.Fields(args)
-		if args == "key list" || args == "key generate rsa" {
+		if args == "key list" || args == "key generate ecdsa" {
 			// in these case, "key" or "key generate" are valid commands, so add an arg to them instead
 			arglist = append(arglist, "extraArg")
 		} else {
@@ -282,10 +282,11 @@ func TestConfigFileTLSCannotBeRelativeToCWD(t *testing.T) {
 	m := &recordingMetaStore{MemStorage: *storage.NewMemStorage()}
 	s := httptest.NewUnstartedServer(setupServerHandler(m))
 	s.TLS, err = tlsconfig.Server(tlsconfig.Options{
-		CertFile:   "../../fixtures/notary-server.crt",
-		KeyFile:    "../../fixtures/notary-server.key",
-		CAFile:     "../../fixtures/root-ca.crt",
-		ClientAuth: tls.RequireAndVerifyClientCert,
+		CertFile:           "../../fixtures/notary-server.crt",
+		KeyFile:            "../../fixtures/notary-server.key",
+		CAFile:             "../../fixtures/root-ca.crt",
+		ClientAuth:         tls.RequireAndVerifyClientCert,
+		ExclusiveRootPools: true,
 	})
 	require.NoError(t, err)
 	s.StartTLS()
@@ -326,10 +327,11 @@ func TestConfigFileTLSCanBeRelativeToConfigOrAbsolute(t *testing.T) {
 	m := &recordingMetaStore{MemStorage: *storage.NewMemStorage()}
 	s := httptest.NewUnstartedServer(setupServerHandler(m))
 	s.TLS, err = tlsconfig.Server(tlsconfig.Options{
-		CertFile:   "../../fixtures/notary-server.crt",
-		KeyFile:    "../../fixtures/notary-server.key",
-		CAFile:     "../../fixtures/root-ca.crt",
-		ClientAuth: tls.RequireAndVerifyClientCert,
+		CertFile:           "../../fixtures/notary-server.crt",
+		KeyFile:            "../../fixtures/notary-server.key",
+		CAFile:             "../../fixtures/root-ca.crt",
+		ClientAuth:         tls.RequireAndVerifyClientCert,
+		ExclusiveRootPools: true,
 	})
 	require.NoError(t, err)
 	s.StartTLS()
@@ -380,10 +382,11 @@ func TestConfigFileOverridenByCmdLineFlags(t *testing.T) {
 	m := &recordingMetaStore{MemStorage: *storage.NewMemStorage()}
 	s := httptest.NewUnstartedServer(setupServerHandler(m))
 	s.TLS, err = tlsconfig.Server(tlsconfig.Options{
-		CertFile:   "../../fixtures/notary-server.crt",
-		KeyFile:    "../../fixtures/notary-server.key",
-		CAFile:     "../../fixtures/root-ca.crt",
-		ClientAuth: tls.RequireAndVerifyClientCert,
+		CertFile:           "../../fixtures/notary-server.crt",
+		KeyFile:            "../../fixtures/notary-server.key",
+		CAFile:             "../../fixtures/root-ca.crt",
+		ClientAuth:         tls.RequireAndVerifyClientCert,
+		ExclusiveRootPools: true,
 	})
 	require.NoError(t, err)
 	s.StartTLS()

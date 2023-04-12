@@ -16,16 +16,19 @@ import (
 	"math/big"
 	"time"
 
-	"github.com/Sirupsen/logrus"
-	"github.com/agl/ed25519"
-	"github.com/docker/notary"
-	"github.com/docker/notary/tuf/data"
+	"github.com/sirupsen/logrus"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/tuf/data"
+	"golang.org/x/crypto/ed25519"
 )
 
 // CanonicalKeyID returns the ID of the public bytes version of a TUF key.
 // On regular RSA/ECDSA TUF keys, this is just the key ID.  On X509 RSA/ECDSA
 // TUF keys, this is the key ID of the public key part of the key in the leaf cert
 func CanonicalKeyID(k data.PublicKey) (string, error) {
+	if k == nil {
+		return "", errors.New("public key is nil")
+	}
 	switch k.Algorithm() {
 	case data.ECDSAx509Key, data.RSAx509Key:
 		return X509PublicKeyID(k)
@@ -82,17 +85,13 @@ func X509PublicKeyID(certPubKey data.PublicKey) (string, error) {
 	return key.ID(), nil
 }
 
-// ParsePEMPrivateKey returns a data.PrivateKey from a PEM encoded private key. It
-// only supports RSA (PKCS#1) and attempts to decrypt using the passphrase, if encrypted.
-func ParsePEMPrivateKey(pemBytes []byte, passphrase string) (data.PrivateKey, error) {
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return nil, errors.New("no valid private key found")
-	}
-
+func parseLegacyPrivateKey(block *pem.Block, passphrase string) (data.PrivateKey, error) {
 	var privKeyBytes []byte
 	var err error
+
+	//lint:ignore SA1019 needed for legacy keys.
 	if x509.IsEncryptedPEMBlock(block) {
+		//lint:ignore SA1019 needed for legacy keys.
 		privKeyBytes, err = x509.DecryptPEMBlock(block, []byte(passphrase))
 		if err != nil {
 			return nil, errors.New("could not decrypt private key")
@@ -137,6 +136,35 @@ func ParsePEMPrivateKey(pemBytes []byte, passphrase string) (data.PrivateKey, er
 
 		return tufECDSAPrivateKey, nil
 
+	default:
+		return nil, fmt.Errorf("unsupported key type %q", block.Type)
+	}
+}
+
+// ParsePEMPrivateKey returns a data.PrivateKey from a PEM encoded private key. It
+// supports PKCS#8 as well as RSA/ECDSA (PKCS#1) only in non-FIPS mode and
+// attempts to decrypt using the passphrase, if encrypted.
+func ParsePEMPrivateKey(pemBytes []byte, passphrase string) (data.PrivateKey, error) {
+	return parsePEMPrivateKey(pemBytes, passphrase, notary.FIPSEnabled())
+}
+
+func parsePEMPrivateKey(pemBytes []byte, passphrase string, fips bool) (data.PrivateKey, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return nil, errors.New("no valid private key found")
+	}
+
+	switch block.Type {
+	case "RSA PRIVATE KEY", "EC PRIVATE KEY", "ED25519 PRIVATE KEY":
+		if fips {
+			return nil, fmt.Errorf("%s not supported in FIPS mode", block.Type)
+		}
+		return parseLegacyPrivateKey(block, passphrase)
+	case "ENCRYPTED PRIVATE KEY", "PRIVATE KEY":
+		if passphrase == "" {
+			return ParsePKCS8ToTufKey(block.Bytes, nil)
+		}
+		return ParsePKCS8ToTufKey(block.Bytes, []byte(passphrase))
 	default:
 		return nil, fmt.Errorf("unsupported key type %q", block.Type)
 	}
@@ -313,21 +341,16 @@ func ValidateCertificate(c *x509.Certificate, checkExpiry bool) error {
 	return nil
 }
 
-// GenerateRSAKey generates an RSA private key and returns a TUF PrivateKey
-func GenerateRSAKey(random io.Reader, bits int) (data.PrivateKey, error) {
-	rsaPrivKey, err := rsa.GenerateKey(random, bits)
-	if err != nil {
-		return nil, fmt.Errorf("could not generate private key: %v", err)
+// GenerateKey returns a new private key using the provided algorithm or an
+// error detailing why the key could not be generated
+func GenerateKey(algorithm string) (data.PrivateKey, error) {
+	switch algorithm {
+	case data.ECDSAKey:
+		return GenerateECDSAKey(rand.Reader)
+	case data.ED25519Key:
+		return GenerateED25519Key(rand.Reader)
 	}
-
-	tufPrivKey, err := RSAToPrivateKey(rsaPrivKey)
-	if err != nil {
-		return nil, err
-	}
-
-	logrus.Debugf("generated RSA key with keyID: %s", tufPrivKey.ID())
-
-	return tufPrivKey, nil
+	return nil, fmt.Errorf("private key type not supported for key generation: %s", algorithm)
 }
 
 // RSAToPrivateKey converts an rsa.Private key to a TUF data.PrivateKey type
@@ -414,75 +437,58 @@ func ED25519ToPrivateKey(privKeyBytes []byte) (data.PrivateKey, error) {
 	return data.NewED25519PrivateKey(*pubKey, privKeyBytes)
 }
 
-func blockType(k data.PrivateKey) (string, error) {
-	switch k.Algorithm() {
-	case data.RSAKey, data.RSAx509Key:
-		return "RSA PRIVATE KEY", nil
-	case data.ECDSAKey, data.ECDSAx509Key:
-		return "EC PRIVATE KEY", nil
-	case data.ED25519Key:
-		return "ED25519 PRIVATE KEY", nil
-	default:
-		return "", fmt.Errorf("algorithm %s not supported", k.Algorithm())
-	}
+// ExtractPrivateKeyAttributes extracts role and gun values from private key bytes
+func ExtractPrivateKeyAttributes(pemBytes []byte) (data.RoleName, data.GUN, error) {
+	return extractPrivateKeyAttributes(pemBytes, notary.FIPSEnabled())
 }
 
-// KeyToPEM returns a PEM encoded key from a Private Key
-func KeyToPEM(privKey data.PrivateKey, role data.RoleName, gun data.GUN) ([]byte, error) {
-	bt, err := blockType(privKey)
-	if err != nil {
-		return nil, err
+func extractPrivateKeyAttributes(pemBytes []byte, fips bool) (data.RoleName, data.GUN, error) {
+	block, _ := pem.Decode(pemBytes)
+	if block == nil {
+		return "", "", errors.New("PEM block is empty")
 	}
 
-	headers := map[string]string{}
+	switch block.Type {
+	case "RSA PRIVATE KEY", "EC PRIVATE KEY", "ED25519 PRIVATE KEY":
+		if fips {
+			return "", "", fmt.Errorf("%s not supported in FIPS mode", block.Type)
+		}
+	case "PRIVATE KEY", "ENCRYPTED PRIVATE KEY":
+		// do nothing for PKCS#8 keys
+	default:
+		return "", "", errors.New("unknown key format")
+	}
+	return data.RoleName(block.Headers["role"]), data.GUN(block.Headers["gun"]), nil
+}
+
+// ConvertPrivateKeyToPKCS8 converts a data.PrivateKey to PKCS#8 Format
+func ConvertPrivateKeyToPKCS8(key data.PrivateKey, role data.RoleName, gun data.GUN, passphrase string) ([]byte, error) {
+	var (
+		err       error
+		der       []byte
+		blockType = "PRIVATE KEY"
+	)
+
+	if passphrase == "" {
+		der, err = ConvertTUFKeyToPKCS8(key, nil)
+	} else {
+		blockType = "ENCRYPTED PRIVATE KEY"
+		der, err = ConvertTUFKeyToPKCS8(key, []byte(passphrase))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("unable to convert to PKCS8 key")
+	}
+
+	headers := make(map[string]string)
 	if role != "" {
 		headers["role"] = role.String()
 	}
+
 	if gun != "" {
 		headers["gun"] = gun.String()
 	}
 
-	block := &pem.Block{
-		Type:    bt,
-		Headers: headers,
-		Bytes:   privKey.Private(),
-	}
-
-	return pem.EncodeToMemory(block), nil
-}
-
-// EncryptPrivateKey returns an encrypted PEM key given a Privatekey
-// and a passphrase
-func EncryptPrivateKey(key data.PrivateKey, role data.RoleName, gun data.GUN, passphrase string) ([]byte, error) {
-	bt, err := blockType(key)
-	if err != nil {
-		return nil, err
-	}
-
-	password := []byte(passphrase)
-	cipherType := x509.PEMCipherAES256
-
-	encryptedPEMBlock, err := x509.EncryptPEMBlock(rand.Reader,
-		bt,
-		key.Private(),
-		password,
-		cipherType)
-	if err != nil {
-		return nil, err
-	}
-
-	if encryptedPEMBlock.Headers == nil {
-		return nil, fmt.Errorf("unable to encrypt key - invalid PEM file produced")
-	}
-
-	if role != "" {
-		encryptedPEMBlock.Headers["role"] = role.String()
-	}
-	if gun != "" {
-		encryptedPEMBlock.Headers["gun"] = gun.String()
-	}
-
-	return pem.EncodeToMemory(encryptedPEMBlock), nil
+	return pem.EncodeToMemory(&pem.Block{Bytes: der, Type: blockType, Headers: headers}), nil
 }
 
 // CertToKey transforms a single input certificate into its corresponding
@@ -537,8 +543,8 @@ func CertBundleToKey(leafCert *x509.Certificate, intCerts []*x509.Certificate) (
 	return newKey, nil
 }
 
-// NewCertificate returns an X509 Certificate following a template, given a GUN and validity interval.
-func NewCertificate(gun string, startTime, endTime time.Time) (*x509.Certificate, error) {
+// NewCertificate returns an X509 Certificate following a template, given a Common Name and validity interval.
+func NewCertificate(commonName string, startTime, endTime time.Time) (*x509.Certificate, error) {
 	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
 
 	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
@@ -549,7 +555,7 @@ func NewCertificate(gun string, startTime, endTime time.Time) (*x509.Certificate
 	return &x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			CommonName: gun,
+			CommonName: commonName,
 		},
 		NotBefore: startTime,
 		NotAfter:  endTime,

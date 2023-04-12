@@ -1,7 +1,7 @@
 package storage
 
 import (
-	"github.com/docker/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/data"
 )
 
 // NoSizeLimit is represented as -1 for arguments to GetMeta
@@ -15,6 +15,7 @@ type MetadataStore interface {
 	SetMulti(map[string][]byte) error
 	RemoveAll() error
 	Remove(name string) error
+	Location() string
 }
 
 // PublicKeyStore must be implemented by a key service

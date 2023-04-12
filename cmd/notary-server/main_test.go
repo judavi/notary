@@ -12,15 +12,15 @@ import (
 	"time"
 
 	"github.com/docker/distribution/health"
-	"github.com/docker/notary"
-	"github.com/docker/notary/server/storage"
-	"github.com/docker/notary/signer/client"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/signed"
-	"github.com/docker/notary/utils"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/server/storage"
+	"github.com/theupdateframework/notary/signer/client"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/signed"
+	"github.com/theupdateframework/notary/utils"
 )
 
 const (
@@ -279,7 +279,7 @@ func TestGetTrustServiceTLSFailure(t *testing.T) {
 
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(),
-		"Unable to configure TLS to the trust service"))
+		"unable to configure TLS to the trust service"))
 
 	// no health function ever registered
 	require.Equal(t, 0, registerCalled)
@@ -380,9 +380,9 @@ func TestGetCacheConfig(t *testing.T) {
 
 func TestGetGUNPRefixes(t *testing.T) {
 	valids := map[string][]string{
-		`{}`: nil,
-		`{"repositories": {"gun_prefixes": []}}`:         nil,
-		`{"repositories": {}}`:                           nil,
+		`{}`:                                     nil,
+		`{"repositories": {"gun_prefixes": []}}`: nil,
+		`{"repositories": {}}`:                   nil,
 		`{"repositories": {"gun_prefixes": ["hello/"]}}`: {"hello/"},
 	}
 	invalids := []string{

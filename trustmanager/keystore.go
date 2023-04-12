@@ -1,17 +1,16 @@
 package trustmanager
 
 import (
-	"encoding/pem"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
 
-	"github.com/Sirupsen/logrus"
-	"github.com/docker/notary"
-	store "github.com/docker/notary/storage"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/utils"
+	"github.com/sirupsen/logrus"
+	"github.com/theupdateframework/notary"
+	store "github.com/theupdateframework/notary/storage"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/utils"
 )
 
 type keyInfoMap map[string]KeyInfo
@@ -87,7 +86,7 @@ func (s *GenericKeyStore) GetKeyInfo(keyID string) (KeyInfo, error) {
 	if info, ok := s.keyInfoMap[keyID]; ok {
 		return info, nil
 	}
-	return KeyInfo{}, fmt.Errorf("Could not find info for keyID %s", keyID)
+	return KeyInfo{}, fmt.Errorf("could not find info for keyID %s", keyID)
 }
 
 // AddKey stores the contents of a PEM-encoded private key as a PEM block
@@ -114,11 +113,7 @@ func (s *GenericKeyStore) AddKey(keyInfo KeyInfo, privKey data.PrivateKey) error
 		}
 	}
 
-	if chosenPassphrase != "" {
-		pemPrivKey, err = utils.EncryptPrivateKey(privKey, keyInfo.Role, keyInfo.Gun, chosenPassphrase)
-	} else {
-		pemPrivKey, err = utils.KeyToPEM(privKey, keyInfo.Role, keyInfo.Gun)
-	}
+	pemPrivKey, err = utils.ConvertPrivateKeyToPKCS8(privKey, keyInfo.Role, keyInfo.Gun, chosenPassphrase)
 
 	if err != nil {
 		return err
@@ -202,13 +197,12 @@ func copyKeyInfoMap(keyInfoMap map[string]KeyInfo) map[string]KeyInfo {
 
 // KeyInfoFromPEM attempts to get a keyID and KeyInfo from the filename and PEM bytes of a key
 func KeyInfoFromPEM(pemBytes []byte, filename string) (string, KeyInfo, error) {
-	var keyID string
-	keyID = filepath.Base(filename)
-	block, _ := pem.Decode(pemBytes)
-	if block == nil {
-		return "", KeyInfo{}, fmt.Errorf("could not decode PEM block for key %s", filename)
+	keyID := filepath.Base(filename)
+	role, gun, err := utils.ExtractPrivateKeyAttributes(pemBytes)
+	if err != nil {
+		return "", KeyInfo{}, err
 	}
-	return keyID, KeyInfo{Gun: data.GUN(block.Headers["gun"]), Role: data.RoleName(block.Headers["role"])}, nil
+	return keyID, KeyInfo{Gun: gun, Role: role}, nil
 }
 
 // getKeyRole finds the role for the given keyID. It attempts to look
@@ -224,10 +218,12 @@ func getKeyRole(s Storage, keyID string) (data.RoleName, error) {
 			if err != nil {
 				return "", err
 			}
-			block, _ := pem.Decode(d)
-			if block != nil {
-				return data.RoleName(block.Headers["role"]), nil
+
+			role, _, err := utils.ExtractPrivateKeyAttributes(d)
+			if err != nil {
+				return "", err
 			}
+			return role, nil
 		}
 	}
 	return "", ErrKeyNotFound{KeyID: keyID}

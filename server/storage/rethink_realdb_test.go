@@ -9,13 +9,13 @@ import (
 	"testing"
 
 	"github.com/docker/go-connections/tlsconfig"
-	"github.com/docker/notary/storage/rethinkdb"
-	"github.com/docker/notary/tuf/data"
 	"github.com/stretchr/testify/require"
-	"gopkg.in/dancannon/gorethink.v3"
+	"github.com/theupdateframework/notary/storage/rethinkdb"
+	"github.com/theupdateframework/notary/tuf/data"
+	gorethink "gopkg.in/rethinkdb/rethinkdb-go.v6"
 )
 
-var tlsOpts = tlsconfig.Options{InsecureSkipVerify: true}
+var tlsOpts = tlsconfig.Options{InsecureSkipVerify: true, ExclusiveRootPools: true}
 
 func rethinkSessionSetup(t *testing.T) (*gorethink.Session, string) {
 	// Get the Rethink connection string from an environment variable
@@ -36,6 +36,7 @@ func rethinkDBSetup(t *testing.T) (RethinkDB, func()) {
 	cleanup()
 	require.NoError(t, rethinkdb.SetupDB(session, dbName, []rethinkdb.Table{
 		TUFFilesRethinkTable,
+		ChangeRethinkTable,
 	}))
 	return NewRethinkDBStorage(dbName, "", "", session), cleanup
 }
@@ -168,4 +169,11 @@ func TestRethinkTUFMetaStoreGetCurrent(t *testing.T) {
 	defer cleanup()
 
 	testTUFMetaStoreGetCurrent(t, dbStore)
+}
+
+func TestRethinkDBGetChanges(t *testing.T) {
+	dbStore, cleanup := rethinkDBSetup(t)
+	defer cleanup()
+
+	testGetChanges(t, dbStore)
 }

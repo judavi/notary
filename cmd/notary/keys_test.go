@@ -9,27 +9,28 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/Sirupsen/logrus"
 	ctxu "github.com/docker/distribution/context"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/context"
 
-	"github.com/docker/notary"
-	"github.com/docker/notary/client"
-	"github.com/docker/notary/cryptoservice"
-	"github.com/docker/notary/passphrase"
-	"github.com/docker/notary/server"
-	"github.com/docker/notary/server/storage"
-	store "github.com/docker/notary/storage"
-	"github.com/docker/notary/trustmanager"
-	"github.com/docker/notary/trustpinning"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/utils"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/client"
+	"github.com/theupdateframework/notary/cryptoservice"
+	"github.com/theupdateframework/notary/passphrase"
+	"github.com/theupdateframework/notary/server"
+	"github.com/theupdateframework/notary/server/storage"
+	store "github.com/theupdateframework/notary/storage"
+	"github.com/theupdateframework/notary/trustmanager"
+	"github.com/theupdateframework/notary/trustpinning"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/utils"
 )
 
 var ret = passphrase.ConstantRetriever("pass")
@@ -42,7 +43,7 @@ func TestRemoveIfNoKey(t *testing.T) {
 	stores := []trustmanager.KeyStore{trustmanager.NewKeyMemoryStore(nil)}
 	err := removeKeyInteractively(stores, "12345", &buf, &buf)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "No key with ID")
+	require.Contains(t, err.Error(), "no key with ID")
 }
 
 // If there is one key, asking to remove it will ask for confirmation.  Passing
@@ -308,7 +309,7 @@ func TestRotateKeyNoGUN(t *testing.T) {
 	}
 	err := k.keysRotate(&cobra.Command{}, []string{})
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "Must specify a GUN")
+	require.Contains(t, err.Error(), "must specify a GUN")
 }
 
 // initialize a repo with keys, so they can be rotated
@@ -332,17 +333,17 @@ func setUpRepo(t *testing.T, tempBaseDir string, gun data.GUN, ret notary.PassRe
 	cryptoService := cryptoservice.NewCryptoService(trustmanager.NewKeyMemoryStore(ret))
 	ts := httptest.NewServer(server.RootHandler(ctx, nil, cryptoService, nil, nil, nil))
 
-	repo, err := client.NewFileCachedNotaryRepository(
+	repo, err := client.NewFileCachedRepository(
 		tempBaseDir, gun, ts.URL, http.DefaultTransport, ret, trustpinning.TrustPinConfig{})
 	require.NoError(t, err, "error creating repo: %s", err)
 
-	rootPubKey, err := repo.CryptoService.Create(data.CanonicalRootRole, "", data.ECDSAKey)
+	rootPubKey, err := repo.GetCryptoService().Create(data.CanonicalRootRole, "", data.ECDSAKey)
 	require.NoError(t, err, "error generating root key: %s", err)
 
 	err = repo.Initialize([]string{rootPubKey.ID()})
 	require.NoError(t, err)
 
-	return ts, repo.CryptoService.ListAllKeys()
+	return ts, repo.GetCryptoService().ListAllKeys()
 }
 
 // The command line uses NotaryRepository's RotateKey - this is just testing
@@ -375,14 +376,14 @@ func TestRotateKeyRemoteServerManagesKey(t *testing.T) {
 		}
 		require.NoError(t, k.keysRotate(&cobra.Command{}, []string{gun.String(), role, "-r"}))
 
-		repo, err := client.NewFileCachedNotaryRepository(tempBaseDir, data.GUN(gun), ts.URL, http.DefaultTransport, ret, trustpinning.TrustPinConfig{})
+		repo, err := client.NewFileCachedRepository(tempBaseDir, data.GUN(gun), ts.URL, http.DefaultTransport, ret, trustpinning.TrustPinConfig{})
 		require.NoError(t, err, "error creating repo: %s", err)
 
 		cl, err := repo.GetChangelist()
 		require.NoError(t, err, "unable to get changelist: %v", err)
 		require.Len(t, cl.List(), 0, "expected the changes to have been published")
 
-		finalKeys := repo.CryptoService.ListAllKeys()
+		finalKeys := repo.GetCryptoService().ListAllKeys()
 		// no keys have been created, since a remote key was specified
 		if role == data.CanonicalSnapshotRole.String() {
 			require.Len(t, finalKeys, 2)
@@ -429,7 +430,7 @@ func TestRotateKeyBothKeys(t *testing.T) {
 	require.NoError(t, k.keysRotate(&cobra.Command{}, []string{gun.String(), data.CanonicalTargetsRole.String()}))
 	require.NoError(t, k.keysRotate(&cobra.Command{}, []string{gun.String(), data.CanonicalSnapshotRole.String()}))
 
-	repo, err := client.NewFileCachedNotaryRepository(tempBaseDir, data.GUN(gun), ts.URL, nil, ret, trustpinning.TrustPinConfig{})
+	repo, err := client.NewFileCachedRepository(tempBaseDir, data.GUN(gun), ts.URL, nil, ret, trustpinning.TrustPinConfig{})
 	require.NoError(t, err, "error creating repo: %s", err)
 
 	cl, err := repo.GetChangelist()
@@ -437,7 +438,7 @@ func TestRotateKeyBothKeys(t *testing.T) {
 	require.Len(t, cl.List(), 0)
 
 	// two new keys have been created, and the old keys should still be gone
-	newKeys := repo.CryptoService.ListAllKeys()
+	newKeys := repo.GetCryptoService().ListAllKeys()
 	// there should be 3 keys - snapshot, targets, and root
 	require.Len(t, newKeys, 3)
 
@@ -494,11 +495,11 @@ func TestRotateKeyRootIsInteractive(t *testing.T) {
 
 	require.Contains(t, out.String(), "Aborting action")
 
-	repo, err := client.NewFileCachedNotaryRepository(tempBaseDir, gun, ts.URL, nil, ret, trustpinning.TrustPinConfig{})
+	repo, err := client.NewFileCachedRepository(tempBaseDir, gun, ts.URL, nil, ret, trustpinning.TrustPinConfig{})
 	require.NoError(t, err, "error creating repo: %s", err)
 
 	// There should still just be one root key (and one targets and one snapshot)
-	allKeys := repo.CryptoService.ListAllKeys()
+	allKeys := repo.GetCryptoService().ListAllKeys()
 	require.Len(t, allKeys, 3)
 }
 
@@ -805,4 +806,33 @@ func TestImportKeysNonexistentFile(t *testing.T) {
 
 	err = k.importKeys(&cobra.Command{}, []string{"Idontexist"})
 	require.Error(t, err)
+}
+
+func TestKeyGeneration(t *testing.T) {
+	tempDir := tempDirWithConfig(t, "{}")
+	defer os.RemoveAll(tempDir)
+
+	_, err := runCommand(t, tempDir, "key", "generate", data.ECDSAKey, "--role", "targets")
+	require.NoError(t, err)
+	assertNumKeys(t, tempDir, 0, 1, false)
+
+	_, err = runCommand(t, tempDir, "key", "generate", data.ECDSAKey, "--role", "targets", "-o", filepath.Join(tempDir, "testkeys"))
+	require.NoError(t, err)
+	assertNumKeys(t, tempDir, 0, 1, false) // key shouldn't be written to store and won't show up in keylist
+
+	// test that we can read the keys we created
+	pub, err := ioutil.ReadFile(filepath.Join(tempDir, "testkeys.pem"))
+	require.NoError(t, err)
+	pubK, err := utils.ParsePEMPublicKey(pub)
+	require.NoError(t, err)
+
+	priv, err := ioutil.ReadFile(filepath.Join(tempDir, "testkeys-key.pem"))
+	require.NoError(t, err)
+	privK, err := utils.ParsePEMPrivateKey(priv, testPassphrase)
+	require.NoError(t, err)
+	// the ID is only generated from the public part of the key so they should be identical
+	require.Equal(t, pubK.ID(), privK.ID())
+
+	_, err = runCommand(t, tempDir, "key", "import", filepath.Join(tempDir, "testkeys-key.pem"))
+	require.EqualError(t, err, "failed to import all keys: invalid key pem block")
 }

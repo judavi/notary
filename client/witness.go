@@ -1,14 +1,14 @@
 package client
 
 import (
-	"github.com/docker/notary/client/changelist"
-	"github.com/docker/notary/tuf"
-	"github.com/docker/notary/tuf/data"
+	"github.com/theupdateframework/notary/client/changelist"
+	"github.com/theupdateframework/notary/tuf"
+	"github.com/theupdateframework/notary/tuf/data"
 )
 
 // Witness creates change objects to witness (i.e. re-sign) the given
 // roles on the next publish. One change is created per role
-func (r *NotaryRepository) Witness(roles ...data.RoleName) ([]data.RoleName, error) {
+func (r *repository) Witness(roles ...data.RoleName) ([]data.RoleName, error) {
 	var err error
 	successful := make([]data.RoleName, 0, len(roles))
 	for _, role := range roles {

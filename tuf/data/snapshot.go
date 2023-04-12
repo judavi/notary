@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"fmt"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/docker/go/canonical/json"
-	"github.com/docker/notary"
+	"github.com/sirupsen/logrus"
+	"github.com/theupdateframework/notary"
 )
 
 // SignedSnapshot is a fully unpacked snapshot.json
@@ -59,7 +59,7 @@ func IsValidSnapshotStructure(s Snapshot) error {
 	return nil
 }
 
-// NewSnapshot initilizes a SignedSnapshot with a given top level root
+// NewSnapshot initializes a SignedSnapshot with a given top level root
 // and targets objects
 func NewSnapshot(root *Signed, targets *Signed) (*SignedSnapshot, error) {
 	logrus.Debug("generating new snapshot...")

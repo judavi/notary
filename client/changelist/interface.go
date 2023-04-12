@@ -1,6 +1,6 @@
 package changelist
 
-import "github.com/docker/notary/tuf/data"
+import "github.com/theupdateframework/notary/tuf/data"
 
 // Changelist is the interface for all TUF change lists
 type Changelist interface {
@@ -20,7 +20,7 @@ type Changelist interface {
 	// Remove deletes the changes corresponding with the indices given
 	Remove(idxs []int) error
 
-	// Close syncronizes any pending writes to the underlying
+	// Close synchronizes any pending writes to the underlying
 	// storage and closes the file/connection
 	Close() error
 

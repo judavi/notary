@@ -7,55 +7,48 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
+	"time"
 
 	_ "github.com/docker/distribution/registry/auth/silly"
-	"github.com/docker/notary"
-	"github.com/docker/notary/server/storage"
-	store "github.com/docker/notary/storage"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/signed"
-	"github.com/docker/notary/tuf/testutils"
-	tufutils "github.com/docker/notary/tuf/utils"
-	"github.com/docker/notary/utils"
 	"github.com/stretchr/testify/require"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/server/storage"
+	store "github.com/theupdateframework/notary/storage"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/signed"
+	"github.com/theupdateframework/notary/tuf/testutils"
+	tufutils "github.com/theupdateframework/notary/tuf/utils"
+	"github.com/theupdateframework/notary/utils"
 	"golang.org/x/net/context"
 )
 
 func TestRunBadAddr(t *testing.T) {
-	err := Run(
-		context.Background(),
-		Config{
-			Addr:  "testAddr",
-			Trust: signed.NewEd25519(),
-		},
-	)
-	require.Error(t, err, "Passed bad addr, Run should have failed")
-}
+	done := make(chan bool)
+	var err error
 
-func TestRunReservedPort(t *testing.T) {
-	ctx, _ := context.WithCancel(context.Background())
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
 
-	err := Run(
-		ctx,
-		Config{
-			Addr:  "localhost:80",
-			Trust: signed.NewEd25519(),
-		},
-	)
+	go func() {
+		err = Run(
+			context.Background(),
+			Config{
+				Addr:  "testAddr",
+				Trust: signed.NewEd25519(),
+			},
+		)
+		done <- true
+	}()
 
-	require.Error(t, err)
-	require.IsType(t, &net.OpError{}, err)
-	require.True(
-		t,
-		strings.Contains(err.Error(), "bind: permission denied"),
-		"Received unexpected err: %s",
-		err.Error(),
-	)
+	select {
+	case <-done:
+		require.Error(t, err, "Passed bad addr, Run should have failed")
+	case <-timer.C:
+		require.Fail(t, "Passed bad addr, Run should have failed")
+	}
 }
 
 func TestRepoPrefixMatches(t *testing.T) {

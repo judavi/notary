@@ -11,13 +11,13 @@ import (
 	"strings"
 
 	bugsnag_hook "github.com/Shopify/logrus-bugsnag"
-	"github.com/Sirupsen/logrus"
 	"github.com/bugsnag/bugsnag-go"
 	"github.com/docker/go-connections/tlsconfig"
 	"github.com/go-sql-driver/mysql"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 
-	"github.com/docker/notary"
+	"github.com/theupdateframework/notary"
 )
 
 // Storage is a configuration about what storage backend a server should use
@@ -55,9 +55,10 @@ func GetPathRelativeToConfig(configuration *viper.Viper, key string) string {
 func ParseServerTLS(configuration *viper.Viper, tlsRequired bool) (*tls.Config, error) {
 	//  unmarshalling into objects does not seem to pick up env vars
 	tlsOpts := tlsconfig.Options{
-		CertFile: GetPathRelativeToConfig(configuration, "server.tls_cert_file"),
-		KeyFile:  GetPathRelativeToConfig(configuration, "server.tls_key_file"),
-		CAFile:   GetPathRelativeToConfig(configuration, "server.client_ca_file"),
+		CertFile:           GetPathRelativeToConfig(configuration, "server.tls_cert_file"),
+		KeyFile:            GetPathRelativeToConfig(configuration, "server.tls_key_file"),
+		CAFile:             GetPathRelativeToConfig(configuration, "server.client_ca_file"),
+		ExclusiveRootPools: true,
 	}
 	if tlsOpts.CAFile != "" {
 		tlsOpts.ClientAuth = tls.RequireAndVerifyClientCert
@@ -231,12 +232,13 @@ func ParseViper(v *viper.Viper, configFile string) error {
 	v.AddConfigPath(configPath)
 
 	if err := v.ReadInConfig(); err != nil {
-		return fmt.Errorf("Could not read config at :%s, viper error: %v", configFile, err)
+		return fmt.Errorf("could not read config at :%s, viper error: %w", configFile, err)
 	}
+
 	return nil
 }
 
-// AdjustLogLevel increases/decreases the log level, return error if the operation is invaild.
+// AdjustLogLevel increases/decreases the log level, return error if the operation is invalid.
 func AdjustLogLevel(increment bool) error {
 	lvl := logrus.GetLevel()
 

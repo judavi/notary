@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/docker/go/canonical/json"
-	"github.com/docker/notary"
 	"github.com/stretchr/testify/require"
+	"github.com/theupdateframework/notary"
 )
 
 func TestGenerateFileMetaDefault(t *testing.T) {
@@ -153,6 +153,7 @@ func TestCheckValidHashStructures(t *testing.T) {
 	// Expected to fail even though the checksum of sha384 is valid,
 	// because we haven't provided a supported hash algorithm yet (ex: sha256).
 	hashes["sha384"], err = hex.DecodeString("64becc3c23843942b1040ffd4743d1368d988ddf046d17d448a6e199c02c3044b425a680112b399d4dbe9b35b7ccc989")
+	require.NoError(t, err)
 	err = CheckValidHashStructures(hashes)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "at least one supported hash needed")
@@ -169,11 +170,13 @@ func TestCheckValidHashStructures(t *testing.T) {
 
 	// Also should be succeed since only check the length of the checksum.
 	hashes[notary.SHA256], err = hex.DecodeString("01234567890a4f2307e49160fa242db6fb95f071ad81a198eeb7d770e61cd6d8")
+	require.NoError(t, err)
 	err = CheckValidHashStructures(hashes)
 	require.NoError(t, err)
 
 	// Should failed since the first '0' is missing.
 	hashes[notary.SHA256], err = hex.DecodeString("1234567890a4f2307e49160fa242db6fb95f071ad81a198eeb7d770e61cd6d8")
+	require.Error(t, err)
 	err = CheckValidHashStructures(hashes)
 	require.IsType(t, ErrInvalidChecksum{}, err)
 }
@@ -297,4 +300,5 @@ func TestFileMetaEquals(t *testing.T) {
 	for _, meta := range f2[1:] {
 		require.False(t, f2[0].Equals(meta))
 	}
+	require.False(t, FileMeta{Length: 1}.Equals(f1[0]))
 }

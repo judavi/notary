@@ -1,12 +1,14 @@
-FROM golang:1.8.3-alpine
-MAINTAINER David Lawrence "david.lawrence@docker.com"
+FROM golang:1.17.13-alpine
 
-RUN apk add --update git gcc libc-dev && rm -rf /var/cache/apk/*
+RUN apk add --update git gcc libc-dev
 
-# Pin to the specific v3.0.0 version
-RUN go get -tags 'mysql postgres file' github.com/mattes/migrate/cli && mv /go/bin/cli /go/bin/migrate
+ENV GO111MODULE=on
 
-ENV NOTARYPKG github.com/docker/notary
+ARG MIGRATE_VER=v4.6.2
+RUN go get -tags 'mysql postgres file' github.com/golang-migrate/migrate/v4/cli@${MIGRATE_VER} && mv /go/bin/cli /go/bin/migrate
+
+ENV GOFLAGS=-mod=vendor
+ENV NOTARYPKG github.com/theupdateframework/notary
 
 # Copy the local repo to the expected go path
 COPY . /go/src/${NOTARYPKG}
@@ -22,7 +24,7 @@ EXPOSE 4443
 RUN go install \
     -tags pkcs11 \
     -ldflags "-w -X ${NOTARYPKG}/version.GitCommit=`git rev-parse --short HEAD` -X ${NOTARYPKG}/version.NotaryVersion=`cat NOTARY_VERSION`" \
-    ${NOTARYPKG}/cmd/notary-server && apk del git gcc libc-dev
+    ${NOTARYPKG}/cmd/notary-server && apk del git gcc libc-dev && rm -rf /var/cache/apk/*
 
 ENTRYPOINT [ "notary-server" ]
 CMD [ "-config=fixtures/server-config-local.json" ]

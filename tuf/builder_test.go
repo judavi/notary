@@ -10,14 +10,14 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/docker/notary"
-	"github.com/docker/notary/trustpinning"
-	"github.com/docker/notary/tuf"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/signed"
-	"github.com/docker/notary/tuf/testutils"
-	"github.com/docker/notary/tuf/utils"
 	"github.com/stretchr/testify/require"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/trustpinning"
+	"github.com/theupdateframework/notary/tuf"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/signed"
+	"github.com/theupdateframework/notary/tuf/testutils"
+	"github.com/theupdateframework/notary/tuf/utils"
 )
 
 var _cachedMeta map[data.RoleName][]byte
@@ -316,11 +316,12 @@ func TestGenerateSnapshotInvalidOperations(t *testing.T) {
 	for _, prevSnapshot := range []*data.SignedSnapshot{nil, repo.Snapshot} {
 		// copy keys, since we expect one of these generation attempts to succeed and we do
 		// some key deletion tests later
-		newCS := testutils.CopyKeys(t, cs, data.CanonicalSnapshotRole)
+		newCS, err := testutils.CopyKeys(cs, data.CanonicalSnapshotRole)
+		require.NoError(t, err)
 
 		// --- we can't generate a snapshot if the root isn't loaded
 		builder := tuf.NewRepoBuilder(gun, newCS, trustpinning.TrustPinConfig{})
-		_, _, err := builder.GenerateSnapshot(prevSnapshot)
+		_, _, err = builder.GenerateSnapshot(prevSnapshot)
 		require.IsType(t, tuf.ErrInvalidBuilderInput{}, err)
 		require.Contains(t, err.Error(), "root must be loaded first")
 		require.False(t, builder.IsLoaded(data.CanonicalSnapshotRole))

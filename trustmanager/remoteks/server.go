@@ -1,17 +1,18 @@
 package remoteks
 
 import (
-	"github.com/Sirupsen/logrus"
 	google_protobuf "github.com/golang/protobuf/ptypes/empty"
+	"github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 
-	"github.com/docker/notary/trustmanager"
+	"github.com/theupdateframework/notary/trustmanager"
 )
 
 // GRPCStorage is an implementer of the GRPC storage server. It passes through
 // the requested operations to an underlying trustmanager.Storage instance, translating
 // between the Go and GRPC interfaces.
 type GRPCStorage struct {
+	UnimplementedStoreServer
 	backend trustmanager.Storage
 }
 

@@ -1,3 +1,4 @@
+//Package client implements everything required for interacting with a Notary repository.
 package client
 
 import (
@@ -6,23 +7,21 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	canonicaljson "github.com/docker/go/canonical/json"
-	"github.com/docker/notary"
-	"github.com/docker/notary/client/changelist"
-	"github.com/docker/notary/cryptoservice"
-	store "github.com/docker/notary/storage"
-	"github.com/docker/notary/trustpinning"
-	"github.com/docker/notary/tuf"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/signed"
-	"github.com/docker/notary/tuf/utils"
+	"github.com/sirupsen/logrus"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/client/changelist"
+	"github.com/theupdateframework/notary/cryptoservice"
+	store "github.com/theupdateframework/notary/storage"
+	"github.com/theupdateframework/notary/trustpinning"
+	"github.com/theupdateframework/notary/tuf"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/signed"
+	"github.com/theupdateframework/notary/tuf/utils"
 )
 
 const (
@@ -36,30 +35,29 @@ func init() {
 	data.SetDefaultExpiryTimes(data.NotaryDefaultExpiries)
 }
 
-// NotaryRepository stores all the information needed to operate on a notary
-// repository.
-type NotaryRepository struct {
-	baseDir        string
+// repository stores all the information needed to operate on a notary repository.
+type repository struct {
 	gun            data.GUN
 	baseURL        string
 	changelist     changelist.Changelist
 	cache          store.MetadataStore
 	remoteStore    store.RemoteStore
-	CryptoService  signed.CryptoService
+	cryptoService  signed.CryptoService
 	tufRepo        *tuf.Repo
 	invalid        *tuf.Repo // known data that was parsable but deemed invalid
-	roundTrip      http.RoundTripper
 	trustPinning   trustpinning.TrustPinConfig
 	LegacyVersions int // number of versions back to fetch roots to sign with
 }
 
-// NewFileCachedNotaryRepository is a wrapper for NewNotaryRepository that initializes
+// NewFileCachedRepository is a wrapper for NewRepository that initializes
 // a file cache from the provided repository, local config information and a crypto service.
 // It also retrieves the remote store associated to the base directory under where all the
-// trust files will be stored and the specified GUN.
-func NewFileCachedNotaryRepository(baseDir string, gun data.GUN, baseURL string, rt http.RoundTripper,
-	retriever notary.PassRetriever, trustPinning trustpinning.TrustPinConfig) (
-	*NotaryRepository, error) {
+// trust files will be stored (This is normally defaults to "~/.notary" or "~/.docker/trust"
+// when enabling Docker content trust) and the specified GUN.
+//
+// In case of a nil RoundTripper, a default offline store is used instead.
+func NewFileCachedRepository(baseDir string, gun data.GUN, baseURL string, rt http.RoundTripper,
+	retriever notary.PassRetriever, trustPinning trustpinning.TrustPinConfig) (Repository, error) {
 
 	cache, err := store.NewFileStore(
 		filepath.Join(baseDir, tufDir, filepath.FromSlash(gun.String()), "metadata"),
@@ -89,31 +87,31 @@ func NewFileCachedNotaryRepository(baseDir string, gun data.GUN, baseURL string,
 		return nil, err
 	}
 
-	return NewNotaryRepository(baseDir, gun, baseURL, remoteStore, cache, trustPinning, cryptoService, cl)
+	return NewRepository(gun, baseURL, remoteStore, cache, trustPinning, cryptoService, cl)
 }
 
-// NewNotaryRepository is the base method that returns a new notary repository.
-// It takes the base directory under where all the trust files will be stored
-// (This is normally defaults to "~/.notary" or "~/.docker/trust" when enabling
-// docker content trust).
-// It expects an initialized remote store and cache.
-func NewNotaryRepository(baseDir string, gun data.GUN, baseURL string, remoteStore store.RemoteStore, cache store.MetadataStore,
-	trustPinning trustpinning.TrustPinConfig, cryptoService signed.CryptoService, cl changelist.Changelist) (
-	*NotaryRepository, error) {
+// NewRepository is the base method that returns a new notary repository.
+// It expects an initialized cache. In case of a nil remote store, a default
+// offline store is used.
+func NewRepository(gun data.GUN, baseURL string, remoteStore store.RemoteStore, cache store.MetadataStore,
+	trustPinning trustpinning.TrustPinConfig, cryptoService signed.CryptoService, cl changelist.Changelist) (Repository, error) {
 
 	// Repo's remote store is either a valid remote store or an OfflineStore
 	if remoteStore == nil {
 		remoteStore = store.OfflineStore{}
 	}
 
-	nRepo := &NotaryRepository{
+	if cache == nil {
+		return nil, fmt.Errorf("got an invalid cache (nil metadata store)")
+	}
+
+	nRepo := &repository{
 		gun:            gun,
 		baseURL:        baseURL,
-		baseDir:        baseDir,
 		changelist:     cl,
 		cache:          cache,
 		remoteStore:    remoteStore,
-		CryptoService:  cryptoService,
+		cryptoService:  cryptoService,
 		trustPinning:   trustPinning,
 		LegacyVersions: 0, // By default, don't sign with legacy roles
 	}
@@ -121,25 +119,67 @@ func NewNotaryRepository(baseDir string, gun data.GUN, baseURL string, remoteSto
 	return nRepo, nil
 }
 
-// GetGUN is a getter for the GUN object from a NotaryRepository
-func (r *NotaryRepository) GetGUN() data.GUN {
+// GetGUN is a getter for the GUN object from a Repository
+func (r *repository) GetGUN() data.GUN {
 	return r.gun
 }
 
-// Target represents a simplified version of the data TUF operates on, so external
-// applications don't have to depend on TUF data types.
-type Target struct {
-	Name   string                    // the name of the target
-	Hashes data.Hashes               // the hash of the target
-	Length int64                     // the size in bytes of the target
-	Custom *canonicaljson.RawMessage // the custom data provided to describe the file at TARGETPATH
+func (r *repository) updateTUF(forWrite bool) error {
+	repo, invalid, err := LoadTUFRepo(TUFLoadOptions{
+		GUN:                    r.gun,
+		TrustPinning:           r.trustPinning,
+		CryptoService:          r.cryptoService,
+		Cache:                  r.cache,
+		RemoteStore:            r.remoteStore,
+		AlwaysCheckInitialized: forWrite,
+	})
+	if err != nil {
+		return err
+	}
+	r.tufRepo = repo
+	r.invalid = invalid
+	return nil
 }
 
-// TargetWithRole represents a Target that exists in a particular role - this is
-// produced by ListTargets and GetTargetByName
-type TargetWithRole struct {
-	Target
-	Role data.RoleName
+// ListTargets calls update first before listing targets
+func (r *repository) ListTargets(roles ...data.RoleName) ([]*TargetWithRole, error) {
+	if err := r.updateTUF(false); err != nil {
+		return nil, err
+	}
+	return NewReadOnly(r.tufRepo).ListTargets(roles...)
+}
+
+// GetTargetByName calls update first before getting target by name
+func (r *repository) GetTargetByName(name string, roles ...data.RoleName) (*TargetWithRole, error) {
+	if err := r.updateTUF(false); err != nil {
+		return nil, err
+	}
+	return NewReadOnly(r.tufRepo).GetTargetByName(name, roles...)
+}
+
+// GetAllTargetMetadataByName calls update first before getting targets by name
+func (r *repository) GetAllTargetMetadataByName(name string) ([]TargetSignedStruct, error) {
+	if err := r.updateTUF(false); err != nil {
+		return nil, err
+	}
+	return NewReadOnly(r.tufRepo).GetAllTargetMetadataByName(name)
+
+}
+
+// ListRoles calls update first before getting roles
+func (r *repository) ListRoles() ([]RoleWithSignatures, error) {
+	if err := r.updateTUF(false); err != nil {
+		return nil, err
+	}
+	return NewReadOnly(r.tufRepo).ListRoles()
+}
+
+// GetDelegationRoles calls update first before getting all delegation roles
+func (r *repository) GetDelegationRoles() ([]data.Role, error) {
+	if err := r.updateTUF(false); err != nil {
+		return nil, err
+	}
+	return NewReadOnly(r.tufRepo).GetDelegationRoles()
 }
 
 // NewTarget is a helper method that returns a Target
@@ -157,6 +197,7 @@ func NewTarget(targetName, targetPath string, targetCustom *canonicaljson.RawMes
 	return &Target{Name: targetName, Hashes: meta.Hashes, Length: meta.Length, Custom: targetCustom}, nil
 }
 
+// rootCertKey generates the corresponding certificate for the private key given the privKey and repo's GUN
 func rootCertKey(gun data.GUN, privKey data.PrivateKey) (data.PublicKey, error) {
 	// Hard-coded policy: the generated certificate expires in 10 years.
 	startTime := time.Now()
@@ -168,24 +209,19 @@ func rootCertKey(gun data.GUN, privKey data.PrivateKey) (data.PublicKey, error) 
 
 	x509PublicKey := utils.CertToKey(cert)
 	if x509PublicKey == nil {
-		return nil, fmt.Errorf(
-			"cannot use regenerated certificate: format %s", cert.PublicKeyAlgorithm)
+		return nil, fmt.Errorf("cannot generate public key from private key with id: %v and algorithm: %v", privKey.ID(), privKey.Algorithm())
 	}
 
 	return x509PublicKey, nil
 }
 
-// Initialize creates a new repository by using rootKey as the root Key for the
-// TUF repository. The server must be reachable (and is asked to generate a
-// timestamp key and possibly other serverManagedRoles), but the created repository
-// result is only stored on local disk, not published to the server. To do that,
-// use r.Publish() eventually.
-func (r *NotaryRepository) Initialize(rootKeyIDs []string, serverManagedRoles ...data.RoleName) error {
+// GetCryptoService is the getter for the repository's CryptoService
+func (r *repository) GetCryptoService() signed.CryptoService {
+	return r.cryptoService
+}
 
-	privKeys, err := getAllPrivKeys(rootKeyIDs, r.CryptoService)
-	if err != nil {
-		return err
-	}
+// initialize initializes the notary repository with a set of rootkeys, root certificates and roles.
+func (r *repository) initialize(rootKeyIDs []string, rootCerts []data.PublicKey, serverManagedRoles ...data.RoleName) error {
 
 	// currently we only support server managing timestamps and snapshots, and
 	// nothing else - timestamps are always managed by the server, and implicit
@@ -214,17 +250,21 @@ func (r *NotaryRepository) Initialize(rootKeyIDs []string, serverManagedRoles ..
 		}
 	}
 
-	rootKeys := make([]data.PublicKey, 0, len(privKeys))
-	for _, privKey := range privKeys {
-		rootKey, err := rootCertKey(r.gun, privKey)
-		if err != nil {
-			return err
-		}
-		rootKeys = append(rootKeys, rootKey)
+	// gets valid public keys corresponding to the rootKeyIDs or generate if necessary
+	var publicKeys []data.PublicKey
+	var err error
+	if len(rootCerts) == 0 {
+		publicKeys, err = r.createNewPublicKeyFromKeyIDs(rootKeyIDs)
+	} else {
+		publicKeys, err = r.publicKeysOfKeyIDs(rootKeyIDs, rootCerts)
+	}
+	if err != nil {
+		return err
 	}
 
+	//initialize repo with public keys
 	rootRole, targetsRole, snapshotRole, timestampRole, err := r.initializeRoles(
-		rootKeys,
+		publicKeys,
 		locallyManagedKeys,
 		remotelyManagedKeys,
 	)
@@ -232,7 +272,7 @@ func (r *NotaryRepository) Initialize(rootKeyIDs []string, serverManagedRoles ..
 		return err
 	}
 
-	r.tufRepo = tuf.NewRepo(r.CryptoService)
+	r.tufRepo = tuf.NewRepo(r.GetCryptoService())
 
 	if err := r.tufRepo.InitRoot(
 		rootRole,
@@ -256,7 +296,112 @@ func (r *NotaryRepository) Initialize(rootKeyIDs []string, serverManagedRoles ..
 	return r.saveMetadata(serverManagesSnapshot)
 }
 
-func (r *NotaryRepository) initializeRoles(rootKeys []data.PublicKey, localRoles, remoteRoles []data.RoleName) (
+// createNewPublicKeyFromKeyIDs generates a set of public keys corresponding to the given list of
+// key IDs existing in the repository's CryptoService.
+// the public keys returned are ordered to correspond to the keyIDs
+func (r *repository) createNewPublicKeyFromKeyIDs(keyIDs []string) ([]data.PublicKey, error) {
+	publicKeys := []data.PublicKey{}
+
+	privKeys, err := getAllPrivKeys(keyIDs, r.GetCryptoService())
+	if err != nil {
+		return nil, err
+	}
+
+	for _, privKey := range privKeys {
+		rootKey, err := rootCertKey(r.gun, privKey)
+		if err != nil {
+			return nil, err
+		}
+		publicKeys = append(publicKeys, rootKey)
+	}
+	return publicKeys, nil
+}
+
+// publicKeysOfKeyIDs confirms that the public key and private keys (by Key IDs) forms valid, strictly ordered key pairs
+// (eg. keyIDs[0] must match pubKeys[0] and keyIDs[1] must match certs[1] and so on).
+// Or throw error when they mismatch.
+func (r *repository) publicKeysOfKeyIDs(keyIDs []string, pubKeys []data.PublicKey) ([]data.PublicKey, error) {
+	if len(keyIDs) != len(pubKeys) {
+		err := fmt.Errorf("require matching number of keyIDs and public keys but got %d IDs and %d public keys", len(keyIDs), len(pubKeys))
+		return nil, err
+	}
+
+	if err := matchKeyIdsWithPubKeys(r, keyIDs, pubKeys); err != nil {
+		return nil, fmt.Errorf("could not obtain public key from IDs: %v", err)
+	}
+	return pubKeys, nil
+}
+
+// matchKeyIdsWithPubKeys validates that the private keys (represented by their IDs) and the public keys
+// forms matching key pairs
+func matchKeyIdsWithPubKeys(r *repository, ids []string, pubKeys []data.PublicKey) error {
+	for i := 0; i < len(ids); i++ {
+		privKey, _, err := r.GetCryptoService().GetPrivateKey(ids[i])
+		if err != nil {
+			return fmt.Errorf("could not get the private key matching id %v: %v", ids[i], err)
+		}
+
+		pubKey := pubKeys[i]
+		err = signed.VerifyPublicKeyMatchesPrivateKey(privKey, pubKey)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Initialize creates a new repository by using rootKey as the root Key for the
+// TUF repository. The server must be reachable (and is asked to generate a
+// timestamp key and possibly other serverManagedRoles), but the created repository
+// result is only stored on local disk, not published to the server. To do that,
+// use r.Publish() eventually.
+func (r *repository) Initialize(rootKeyIDs []string, serverManagedRoles ...data.RoleName) error {
+	return r.initialize(rootKeyIDs, nil, serverManagedRoles...)
+}
+
+type errKeyNotFound struct{}
+
+func (errKeyNotFound) Error() string {
+	return "cannot find matching private key id"
+}
+
+// keyExistsInList returns the id of the private key in ids that matches the public key
+// otherwise return empty string
+func keyExistsInList(cert data.PublicKey, ids map[string]bool) error {
+	pubKeyID, err := utils.CanonicalKeyID(cert)
+	if err != nil {
+		return fmt.Errorf("failed to obtain the public key id from the given certificate: %v", err)
+	}
+	if _, ok := ids[pubKeyID]; ok {
+		return nil
+	}
+	return errKeyNotFound{}
+}
+
+// InitializeWithCertificate initializes the repository with root keys and their corresponding certificates
+func (r *repository) InitializeWithCertificate(rootKeyIDs []string, rootCerts []data.PublicKey,
+	serverManagedRoles ...data.RoleName) error {
+
+	// If we explicitly pass in certificate(s) but not key, then look keys up using certificate
+	if len(rootKeyIDs) == 0 && len(rootCerts) != 0 {
+		rootKeyIDs = []string{}
+		availableRootKeyIDs := make(map[string]bool)
+		for _, k := range r.GetCryptoService().ListKeys(data.CanonicalRootRole) {
+			availableRootKeyIDs[k] = true
+		}
+
+		for _, cert := range rootCerts {
+			if err := keyExistsInList(cert, availableRootKeyIDs); err != nil {
+				return fmt.Errorf("error initializing repository with certificate: %v", err)
+			}
+			keyID, _ := utils.CanonicalKeyID(cert)
+			rootKeyIDs = append(rootKeyIDs, keyID)
+		}
+	}
+	return r.initialize(rootKeyIDs, rootCerts, serverManagedRoles...)
+}
+
+func (r *repository) initializeRoles(rootKeys []data.PublicKey, localRoles, remoteRoles []data.RoleName) (
 	root, targets, snapshot, timestamp data.BaseRole, err error) {
 	root = data.NewBaseRole(
 		data.CanonicalRootRole,
@@ -269,7 +414,7 @@ func (r *NotaryRepository) initializeRoles(rootKeys []data.PublicKey, localRoles
 	for _, role := range localRoles {
 		// This is currently hardcoding the keys to ECDSA.
 		var key data.PublicKey
-		key, err = r.CryptoService.Create(role, r.gun, data.ECDSAKey)
+		key, err = r.GetCryptoService().Create(role, r.gun, data.ECDSAKey)
 		if err != nil {
 			return
 		}
@@ -355,8 +500,7 @@ func addChange(cl changelist.Changelist, c changelist.Change, roles ...data.Role
 // AddTarget creates new changelist entries to add a target to the given roles
 // in the repository when the changelist gets applied at publish time.
 // If roles are unspecified, the default role is "targets"
-func (r *NotaryRepository) AddTarget(target *Target, roles ...data.RoleName) error {
-
+func (r *repository) AddTarget(target *Target, roles ...data.RoleName) error {
 	if len(target.Hashes) == 0 {
 		return fmt.Errorf("no hashes specified for target \"%s\"", target.Name)
 	}
@@ -377,175 +521,21 @@ func (r *NotaryRepository) AddTarget(target *Target, roles ...data.RoleName) err
 // RemoveTarget creates new changelist entries to remove a target from the given
 // roles in the repository when the changelist gets applied at publish time.
 // If roles are unspecified, the default role is "target".
-func (r *NotaryRepository) RemoveTarget(targetName string, roles ...data.RoleName) error {
+func (r *repository) RemoveTarget(targetName string, roles ...data.RoleName) error {
 	logrus.Debugf("Removing target \"%s\"", targetName)
 	template := changelist.NewTUFChange(changelist.ActionDelete, "",
 		changelist.TypeTargetsTarget, targetName, nil)
 	return addChange(r.changelist, template, roles...)
 }
 
-// ListTargets lists all targets for the current repository. The list of
-// roles should be passed in order from highest to lowest priority.
-//
-// IMPORTANT: if you pass a set of roles such as [ "targets/a", "targets/x"
-// "targets/a/b" ], even though "targets/a/b" is part of the "targets/a" subtree
-// its entries will be strictly shadowed by those in other parts of the "targets/a"
-// subtree and also the "targets/x" subtree, as we will defer parsing it until
-// we explicitly reach it in our iteration of the provided list of roles.
-func (r *NotaryRepository) ListTargets(roles ...data.RoleName) ([]*TargetWithRole, error) {
-	if err := r.Update(false); err != nil {
-		return nil, err
-	}
-
-	if len(roles) == 0 {
-		roles = []data.RoleName{data.CanonicalTargetsRole}
-	}
-	targets := make(map[string]*TargetWithRole)
-	for _, role := range roles {
-		// Define an array of roles to skip for this walk (see IMPORTANT comment above)
-		skipRoles := utils.RoleNameSliceRemove(roles, role)
-
-		// Define a visitor function to populate the targets map in priority order
-		listVisitorFunc := func(tgt *data.SignedTargets, validRole data.DelegationRole) interface{} {
-			// We found targets so we should try to add them to our targets map
-			for targetName, targetMeta := range tgt.Signed.Targets {
-				// Follow the priority by not overriding previously set targets
-				// and check that this path is valid with this role
-				if _, ok := targets[targetName]; ok || !validRole.CheckPaths(targetName) {
-					continue
-				}
-				targets[targetName] = &TargetWithRole{
-					Target: Target{
-						Name:   targetName,
-						Hashes: targetMeta.Hashes,
-						Length: targetMeta.Length,
-						Custom: targetMeta.Custom,
-					},
-					Role: validRole.Name,
-				}
-			}
-			return nil
-		}
-
-		r.tufRepo.WalkTargets("", role, listVisitorFunc, skipRoles...)
-	}
-
-	var targetList []*TargetWithRole
-	for _, v := range targets {
-		targetList = append(targetList, v)
-	}
-
-	return targetList, nil
-}
-
-// GetTargetByName returns a target by the given name. If no roles are passed
-// it uses the targets role and does a search of the entire delegation
-// graph, finding the first entry in a breadth first search of the delegations.
-// If roles are passed, they should be passed in descending priority and
-// the target entry found in the subtree of the highest priority role
-// will be returned.
-// See the IMPORTANT section on ListTargets above. Those roles also apply here.
-func (r *NotaryRepository) GetTargetByName(name string, roles ...data.RoleName) (*TargetWithRole, error) {
-	if err := r.Update(false); err != nil {
-		return nil, err
-	}
-
-	if len(roles) == 0 {
-		roles = append(roles, data.CanonicalTargetsRole)
-	}
-	var resultMeta data.FileMeta
-	var resultRoleName data.RoleName
-	var foundTarget bool
-	for _, role := range roles {
-		// Define an array of roles to skip for this walk (see IMPORTANT comment above)
-		skipRoles := utils.RoleNameSliceRemove(roles, role)
-
-		// Define a visitor function to find the specified target
-		getTargetVisitorFunc := func(tgt *data.SignedTargets, validRole data.DelegationRole) interface{} {
-			if tgt == nil {
-				return nil
-			}
-			// We found the target and validated path compatibility in our walk,
-			// so we should stop our walk and set the resultMeta and resultRoleName variables
-			if resultMeta, foundTarget = tgt.Signed.Targets[name]; foundTarget {
-				resultRoleName = validRole.Name
-				return tuf.StopWalk{}
-			}
-			return nil
-		}
-		// Check that we didn't error, and that we assigned to our target
-		if err := r.tufRepo.WalkTargets(name, role, getTargetVisitorFunc, skipRoles...); err == nil && foundTarget {
-			return &TargetWithRole{Target: Target{Name: name, Hashes: resultMeta.Hashes, Length: resultMeta.Length, Custom: resultMeta.Custom}, Role: resultRoleName}, nil
-		}
-	}
-	return nil, fmt.Errorf("No trust data for %s", name)
-
-}
-
-// TargetSignedStruct is a struct that contains a Target, the role it was found in, and the list of signatures for that role
-type TargetSignedStruct struct {
-	Role       data.DelegationRole
-	Target     Target
-	Signatures []data.Signature
-}
-
-// GetAllTargetMetadataByName searches the entire delegation role tree to find the specified target by name for all
-// roles, and returns a list of TargetSignedStructs for each time it finds the specified target.
-// If given an empty string for a target name, it will return back all targets signed into the repository in every role
-func (r *NotaryRepository) GetAllTargetMetadataByName(name string) ([]TargetSignedStruct, error) {
-	if err := r.Update(false); err != nil {
-		return nil, err
-	}
-
-	var targetInfoList []TargetSignedStruct
-
-	// Define a visitor function to find the specified target
-	getAllTargetInfoByNameVisitorFunc := func(tgt *data.SignedTargets, validRole data.DelegationRole) interface{} {
-		if tgt == nil {
-			return nil
-		}
-		// We found a target and validated path compatibility in our walk,
-		// so add it to our list if we have a match
-		// if we have an empty name, add all targets, else check if we have it
-		var targetMetaToAdd data.Files
-		if name == "" {
-			targetMetaToAdd = tgt.Signed.Targets
-		} else {
-			if meta, ok := tgt.Signed.Targets[name]; ok {
-				targetMetaToAdd = data.Files{name: meta}
-			}
-		}
-
-		for targetName, resultMeta := range targetMetaToAdd {
-			targetInfo := TargetSignedStruct{
-				Role:       validRole,
-				Target:     Target{Name: targetName, Hashes: resultMeta.Hashes, Length: resultMeta.Length, Custom: resultMeta.Custom},
-				Signatures: tgt.Signatures,
-			}
-			targetInfoList = append(targetInfoList, targetInfo)
-		}
-		// continue walking to all child roles
-		return nil
-	}
-
-	// Check that we didn't error, and that we found the target at least once
-	if err := r.tufRepo.WalkTargets(name, "", getAllTargetInfoByNameVisitorFunc); err != nil {
-		return nil, err
-	}
-	if len(targetInfoList) == 0 {
-		return nil, fmt.Errorf("No valid trust data for %s", name)
-	}
-	return targetInfoList, nil
-}
-
 // GetChangelist returns the list of the repository's unpublished changes
-func (r *NotaryRepository) GetChangelist() (changelist.Changelist, error) {
+func (r *repository) GetChangelist() (changelist.Changelist, error) {
 	return r.changelist, nil
 }
 
 // getRemoteStore returns the remoteStore of a repository if valid or
 // or an OfflineStore otherwise
-func (r *NotaryRepository) getRemoteStore() store.RemoteStore {
+func (r *repository) getRemoteStore() store.RemoteStore {
 	if r.remoteStore != nil {
 		return r.remoteStore
 	}
@@ -555,54 +545,9 @@ func (r *NotaryRepository) getRemoteStore() store.RemoteStore {
 	return r.remoteStore
 }
 
-// RoleWithSignatures is a Role with its associated signatures
-type RoleWithSignatures struct {
-	Signatures []data.Signature
-	data.Role
-}
-
-// ListRoles returns a list of RoleWithSignatures objects for this repo
-// This represents the latest metadata for each role in this repo
-func (r *NotaryRepository) ListRoles() ([]RoleWithSignatures, error) {
-	// Update to latest repo state
-	if err := r.Update(false); err != nil {
-		return nil, err
-	}
-
-	// Get all role info from our updated keysDB, can be empty
-	roles := r.tufRepo.GetAllLoadedRoles()
-
-	var roleWithSigs []RoleWithSignatures
-
-	// Populate RoleWithSignatures with Role from keysDB and signatures from TUF metadata
-	for _, role := range roles {
-		roleWithSig := RoleWithSignatures{Role: *role, Signatures: nil}
-		switch role.Name {
-		case data.CanonicalRootRole:
-			roleWithSig.Signatures = r.tufRepo.Root.Signatures
-		case data.CanonicalTargetsRole:
-			roleWithSig.Signatures = r.tufRepo.Targets[data.CanonicalTargetsRole].Signatures
-		case data.CanonicalSnapshotRole:
-			roleWithSig.Signatures = r.tufRepo.Snapshot.Signatures
-		case data.CanonicalTimestampRole:
-			roleWithSig.Signatures = r.tufRepo.Timestamp.Signatures
-		default:
-			if !data.IsDelegation(role.Name) {
-				continue
-			}
-			if _, ok := r.tufRepo.Targets[role.Name]; ok {
-				// We'll only find a signature if we've published any targets with this delegation
-				roleWithSig.Signatures = r.tufRepo.Targets[role.Name].Signatures
-			}
-		}
-		roleWithSigs = append(roleWithSigs, roleWithSig)
-	}
-	return roleWithSigs, nil
-}
-
 // Publish pushes the local changes in signed material to the remote notary-server
 // Conceptually it performs an operation similar to a `git rebase`
-func (r *NotaryRepository) Publish() error {
+func (r *repository) Publish() error {
 	if err := r.publish(r.changelist); err != nil {
 		return err
 	}
@@ -617,10 +562,10 @@ func (r *NotaryRepository) Publish() error {
 
 // publish pushes the changes in the given changelist to the remote notary-server
 // Conceptually it performs an operation similar to a `git rebase`
-func (r *NotaryRepository) publish(cl changelist.Changelist) error {
+func (r *repository) publish(cl changelist.Changelist) error {
 	var initialPublish bool
 	// update first before publishing
-	if err := r.Update(true); err != nil {
+	if err := r.updateTUF(true); err != nil {
 		// If the remote is not aware of the repo, then this is being published
 		// for the first time.  Try to initialize the repository before publishing.
 		if _, ok := err.(ErrRepositoryNotExist); ok {
@@ -724,7 +669,7 @@ func signRootIfNecessary(updates map[data.RoleName][]byte, repo *tuf.Repo, extra
 
 // Fetch back a `legacyVersions` number of roots files, collect the root public keys
 // This includes old `root` roles as well as legacy versioned root roles, e.g. `1.root`
-func (r *NotaryRepository) oldKeysForLegacyClientSupport(legacyVersions int, initialPublish bool) (data.KeyList, error) {
+func (r *repository) oldKeysForLegacyClientSupport(legacyVersions int, initialPublish bool) (data.KeyList, error) {
 	if initialPublish {
 		return nil, nil
 	}
@@ -747,7 +692,14 @@ func (r *NotaryRepository) oldKeysForLegacyClientSupport(legacyVersions int, ini
 	}
 	oldKeys := make(map[string]data.PublicKey)
 
-	c, err := r.bootstrapClient(true)
+	c, err := bootstrapClient(TUFLoadOptions{
+		GUN:                    r.gun,
+		TrustPinning:           r.trustPinning,
+		CryptoService:          r.cryptoService,
+		Cache:                  r.cache,
+		RemoteStore:            r.remoteStore,
+		AlwaysCheckInitialized: true,
+	})
 	// require a server connection to fetch old roots
 	if err != nil {
 		return nil, err
@@ -814,8 +766,8 @@ func signTargets(updates map[data.RoleName][]byte, repo *tuf.Repo, initialPublis
 // r.tufRepo.  This attempts to load metadata for all roles.  Since server
 // snapshots are supported, if the snapshot metadata fails to load, that's ok.
 // This assumes that bootstrapRepo is only used by Publish() or RotateKey()
-func (r *NotaryRepository) bootstrapRepo() error {
-	b := tuf.NewRepoBuilder(r.gun, r.CryptoService, r.trustPinning)
+func (r *repository) bootstrapRepo() error {
+	b := tuf.NewRepoBuilder(r.gun, r.GetCryptoService(), r.trustPinning)
 
 	logrus.Debugf("Loading trusted collection.")
 
@@ -845,7 +797,7 @@ func (r *NotaryRepository) bootstrapRepo() error {
 
 // saveMetadata saves contents of r.tufRepo onto the local disk, creating
 // signatures as necessary, possibly prompting for passphrases.
-func (r *NotaryRepository) saveMetadata(ignoreSnapshot bool) error {
+func (r *repository) saveMetadata(ignoreSnapshot bool) error {
 	logrus.Debugf("Saving changes to Trusted Collection.")
 
 	rootJSON, err := serializeCanonicalRole(r.tufRepo, data.CanonicalRootRole, nil)
@@ -887,141 +839,12 @@ func (r *NotaryRepository) saveMetadata(ignoreSnapshot bool) error {
 	return r.cache.Set(data.CanonicalSnapshotRole.String(), snapshotJSON)
 }
 
-// returns a properly constructed ErrRepositoryNotExist error based on this
-// repo's information
-func (r *NotaryRepository) errRepositoryNotExist() error {
-	host := r.baseURL
-	parsed, err := url.Parse(r.baseURL)
-	if err == nil {
-		host = parsed.Host // try to exclude the scheme and any paths
-	}
-	return ErrRepositoryNotExist{remote: host, gun: r.gun}
-}
-
-// Update bootstraps a trust anchor (root.json) before updating all the
-// metadata from the repo.
-func (r *NotaryRepository) Update(forWrite bool) error {
-	c, err := r.bootstrapClient(forWrite)
-	if err != nil {
-		if _, ok := err.(store.ErrMetaNotFound); ok {
-			return r.errRepositoryNotExist()
-		}
-		return err
-	}
-	repo, invalid, err := c.Update()
-	if err != nil {
-		// notFound.Resource may include a version or checksum so when the role is root,
-		// it will be root, <version>.root or root.<checksum>.
-		notFound, ok := err.(store.ErrMetaNotFound)
-		isRoot, _ := regexp.MatchString(`\.?`+data.CanonicalRootRole.String()+`\.?`, notFound.Resource)
-		if ok && isRoot {
-			return r.errRepositoryNotExist()
-		}
-		return err
-	}
-	// we can be assured if we are at this stage that the repo we built is good
-	// no need to test the following function call for an error as it will always be fine should the repo be good- it is!
-	r.tufRepo = repo
-	r.invalid = invalid
-	warnRolesNearExpiry(repo)
-	return nil
-}
-
-// bootstrapClient attempts to bootstrap a root.json to be used as the trust
-// anchor for a repository. The checkInitialized argument indicates whether
-// we should always attempt to contact the server to determine if the repository
-// is initialized or not. If set to true, we will always attempt to download
-// and return an error if the remote repository errors.
-//
-// Populates a tuf.RepoBuilder with this root metadata. If the root metadata
-// downloaded is a newer version than what is on disk, then intermediate
-// versions will be downloaded and verified in order to rotate trusted keys
-// properly. Newer root metadata must always be signed with the previous
-// threshold and keys.
-//
-// Fails if the remote server is reachable and does not know the repo
-// (i.e. before the first r.Publish()), in which case the error is
-// store.ErrMetaNotFound, or if the root metadata (from whichever source is used)
-// is not trusted.
-//
-// Returns a TUFClient for the remote server, which may not be actually
-// operational (if the URL is invalid but a root.json is cached).
-func (r *NotaryRepository) bootstrapClient(checkInitialized bool) (*TUFClient, error) {
-	minVersion := 1
-	// the old root on disk should not be validated against any trust pinning configuration
-	// because if we have an old root, it itself is the thing that pins trust
-	oldBuilder := tuf.NewRepoBuilder(r.gun, r.CryptoService, trustpinning.TrustPinConfig{})
-
-	// by default, we want to use the trust pinning configuration on any new root that we download
-	newBuilder := tuf.NewRepoBuilder(r.gun, r.CryptoService, r.trustPinning)
-
-	// Try to read root from cache first. We will trust this root until we detect a problem
-	// during update which will cause us to download a new root and perform a rotation.
-	// If we have an old root, and it's valid, then we overwrite the newBuilder to be one
-	// preloaded with the old root or one which uses the old root for trust bootstrapping.
-	if rootJSON, err := r.cache.GetSized(data.CanonicalRootRole.String(), store.NoSizeLimit); err == nil {
-		// if we can't load the cached root, fail hard because that is how we pin trust
-		if err := oldBuilder.Load(data.CanonicalRootRole, rootJSON, minVersion, true); err != nil {
-			return nil, err
-		}
-
-		// again, the root on disk is the source of trust pinning, so use an empty trust
-		// pinning configuration
-		newBuilder = tuf.NewRepoBuilder(r.gun, r.CryptoService, trustpinning.TrustPinConfig{})
-
-		if err := newBuilder.Load(data.CanonicalRootRole, rootJSON, minVersion, false); err != nil {
-			// Ok, the old root is expired - we want to download a new one.  But we want to use the
-			// old root to verify the new root, so bootstrap a new builder with the old builder
-			// but use the trustpinning to validate the new root
-			minVersion = oldBuilder.GetLoadedVersion(data.CanonicalRootRole)
-			newBuilder = oldBuilder.BootstrapNewBuilderWithNewTrustpin(r.trustPinning)
-		}
-	}
-
-	remote := r.getRemoteStore()
-
-	if !newBuilder.IsLoaded(data.CanonicalRootRole) || checkInitialized {
-		// remoteErr was nil and we were not able to load a root from cache or
-		// are specifically checking for initialization of the repo.
-
-		// if remote store successfully set up, try and get root from remote
-		// We don't have any local data to determine the size of root, so try the maximum (though it is restricted at 100MB)
-		tmpJSON, err := remote.GetSized(data.CanonicalRootRole.String(), store.NoSizeLimit)
-		if err != nil {
-			// we didn't have a root in cache and were unable to load one from
-			// the server. Nothing we can do but error.
-			return nil, err
-		}
-
-		if !newBuilder.IsLoaded(data.CanonicalRootRole) {
-			// we always want to use the downloaded root if we couldn't load from cache
-			if err := newBuilder.Load(data.CanonicalRootRole, tmpJSON, minVersion, false); err != nil {
-				return nil, err
-			}
-
-			err = r.cache.Set(data.CanonicalRootRole.String(), tmpJSON)
-			if err != nil {
-				// if we can't write cache we should still continue, just log error
-				logrus.Errorf("could not save root to cache: %s", err.Error())
-			}
-		}
-	}
-
-	// We can only get here if remoteErr != nil (hence we don't download any new root),
-	// and there was no root on disk
-	if !newBuilder.IsLoaded(data.CanonicalRootRole) {
-		return nil, ErrRepoNotInitialized{}
-	}
-
-	return NewTUFClient(oldBuilder, newBuilder, remote, r.cache), nil
-}
-
 // RotateKey removes all existing keys associated with the role. If no keys are
 // specified in keyList, then this creates and adds one new key or delegates
 // managing the key to the server. If key(s) are specified by keyList, then they are
 // used for signing the role.
 // These changes are staged in a changelist until publish is called.
-func (r *NotaryRepository) RotateKey(role data.RoleName, serverManagesKey bool, keyList []string) error {
+func (r *repository) RotateKey(role data.RoleName, serverManagesKey bool, keyList []string) error {
 	if err := checkRotationInput(role, serverManagesKey); err != nil {
 		return err
 	}
@@ -1039,7 +862,7 @@ func (r *NotaryRepository) RotateKey(role data.RoleName, serverManagesKey bool, 
 }
 
 // Given a set of new keys to rotate to and a set of keys to drop, returns the list of current keys to use
-func (r *NotaryRepository) pubKeyListForRotation(role data.RoleName, serverManaged bool, newKeys []string) (pubKeyList data.KeyList, err error) {
+func (r *repository) pubKeyListForRotation(role data.RoleName, serverManaged bool, newKeys []string) (pubKeyList data.KeyList, err error) {
 	var pubKey data.PublicKey
 
 	// If server manages the key being rotated, request a rotation and return the new key
@@ -1057,7 +880,7 @@ func (r *NotaryRepository) pubKeyListForRotation(role data.RoleName, serverManag
 	// If no new keys are passed in, we generate one
 	if len(newKeys) == 0 {
 		pubKeyList = make(data.KeyList, 0, 1)
-		pubKey, err = r.CryptoService.Create(role, r.gun, data.ECDSAKey)
+		pubKey, err = r.GetCryptoService().Create(role, r.gun, data.ECDSAKey)
 		pubKeyList = append(pubKeyList, pubKey)
 	}
 	if err != nil {
@@ -1068,7 +891,7 @@ func (r *NotaryRepository) pubKeyListForRotation(role data.RoleName, serverManag
 	if len(newKeys) > 0 {
 		pubKeyList = make(data.KeyList, 0, len(newKeys))
 		for _, keyID := range newKeys {
-			pubKey = r.CryptoService.GetKey(keyID)
+			pubKey = r.GetCryptoService().GetKey(keyID)
 			if pubKey == nil {
 				return nil, fmt.Errorf("unable to find key: %s", keyID)
 			}
@@ -1084,14 +907,14 @@ func (r *NotaryRepository) pubKeyListForRotation(role data.RoleName, serverManag
 	return pubKeyList, nil
 }
 
-func (r *NotaryRepository) pubKeysToCerts(role data.RoleName, pubKeyList data.KeyList) (data.KeyList, error) {
+func (r *repository) pubKeysToCerts(role data.RoleName, pubKeyList data.KeyList) (data.KeyList, error) {
 	// only generate certs for root keys
 	if role != data.CanonicalRootRole {
 		return pubKeyList, nil
 	}
 
 	for i, pubKey := range pubKeyList {
-		privKey, loadedRole, err := r.CryptoService.GetPrivateKey(pubKey.ID())
+		privKey, loadedRole, err := r.GetCryptoService().GetPrivateKey(pubKey.ID())
 		if err != nil {
 			return nil, err
 		}
@@ -1125,7 +948,7 @@ func checkRotationInput(role data.RoleName, serverManaged bool) error {
 	return nil
 }
 
-func (r *NotaryRepository) rootFileKeyChange(cl changelist.Changelist, role data.RoleName, action string, keyList []data.PublicKey) error {
+func (r *repository) rootFileKeyChange(cl changelist.Changelist, role data.RoleName, action string, keyList []data.PublicKey) error {
 	meta := changelist.TUFRootData{
 		RoleName: role,
 		Keys:     keyList,
@@ -1153,11 +976,11 @@ func DeleteTrustData(baseDir string, gun data.GUN, URL string, rt http.RoundTrip
 	if err := os.RemoveAll(localRepo); err != nil {
 		return fmt.Errorf("error clearing TUF repo data: %v", err)
 	}
-	// Note that this will require admin permission in this NotaryRepository's roundtripper
+	// Note that this will require admin permission for the gun in the roundtripper
 	if deleteRemote {
 		remote, err := getRemoteStore(URL, gun, rt)
 		if err != nil {
-			logrus.Error("unable to instantiate a remote store: %v", err)
+			logrus.Errorf("unable to instantiate a remote store: %v", err)
 			return err
 		}
 		if err := remote.RemoveAll(); err != nil {
@@ -1165,4 +988,10 @@ func DeleteTrustData(baseDir string, gun data.GUN, URL string, rt http.RoundTrip
 		}
 	}
 	return nil
+}
+
+// SetLegacyVersions allows the number of legacy versions of the root
+// to be inspected for old signing keys to be configured.
+func (r *repository) SetLegacyVersions(n int) {
+	r.LegacyVersions = n
 }

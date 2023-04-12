@@ -12,17 +12,17 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/notary"
-	"github.com/docker/notary/passphrase"
-	store "github.com/docker/notary/storage"
-	"github.com/docker/notary/trustpinning"
-	"github.com/docker/notary/tuf/data"
 	"github.com/stretchr/testify/require"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/passphrase"
+	store "github.com/theupdateframework/notary/storage"
+	"github.com/theupdateframework/notary/trustpinning"
+	"github.com/theupdateframework/notary/tuf/data"
 )
 
 // Once a fixture is read in, ensure that it's valid by making sure the expiry
 // times of all the metadata and certificates is > 10 years ahead
-func requireValidFixture(t *testing.T, notaryRepo *NotaryRepository) {
+func requireValidFixture(t *testing.T, notaryRepo *repository) {
 	tenYearsInFuture := time.Now().AddDate(10, 0, 0)
 	require.True(t, notaryRepo.tufRepo.Root.Signed.Expires.After(tenYearsInFuture))
 	require.True(t, notaryRepo.tufRepo.Snapshot.Signed.Expires.After(tenYearsInFuture))
@@ -35,12 +35,16 @@ func requireValidFixture(t *testing.T, notaryRepo *NotaryRepository) {
 // recursively copies the contents of one directory into another - ignores
 // symlinks
 func recursiveCopy(sourceDir, targetDir string) error {
+	sourceDir, err := filepath.Abs(sourceDir)
+	if err != nil {
+		return err
+	}
 	return filepath.Walk(sourceDir, func(fp string, fi os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 
-		targetFP := filepath.Join(targetDir, strings.TrimPrefix(fp, sourceDir+"/"))
+		targetFP := filepath.Join(targetDir, strings.TrimPrefix(fp, sourceDir))
 
 		if fi.IsDir() {
 			return os.MkdirAll(targetFP, fi.Mode())
@@ -68,7 +72,7 @@ func recursiveCopy(sourceDir, targetDir string) error {
 		if err != nil {
 			return err
 		}
-		return nil
+		return out.Sync()
 	})
 }
 
@@ -86,14 +90,15 @@ func Test0Dot1Migration(t *testing.T) {
 	ts := fullTestServer(t)
 	defer ts.Close()
 
-	_, err = NewFileCachedNotaryRepository(tmpDir, gun, ts.URL, http.DefaultTransport,
+	_, err = NewFileCachedRepository(tmpDir, gun, ts.URL, http.DefaultTransport,
 		passphrase.ConstantRetriever(passwd), trustpinning.TrustPinConfig{})
 	require.NoError(t, err, "error creating repo: %s", err)
 
 	// check that root_keys and tuf_keys are gone and that all corect keys are present and have the correct headers
-	files, _ := ioutil.ReadDir(filepath.Join(tmpDir, notary.PrivDir))
+	files, err := ioutil.ReadDir(filepath.Join(tmpDir, notary.PrivDir))
+	require.NoError(t, err)
 	require.Equal(t, files[0].Name(), "7fc757801b9bab4ec9e35bfe7a6b61668ff6f4c81b5632af19e6c728ab799599.key")
-	targKey, err := os.OpenFile(filepath.Join(tmpDir, notary.PrivDir, "7fc757801b9bab4ec9e35bfe7a6b61668ff6f4c81b5632af19e6c728ab799599.key"), os.O_RDONLY, notary.PrivExecPerms)
+	targKey, err := os.Open(filepath.Join(tmpDir, notary.PrivDir, "7fc757801b9bab4ec9e35bfe7a6b61668ff6f4c81b5632af19e6c728ab799599.key"))
 	require.NoError(t, err)
 	defer targKey.Close()
 	targBytes, _ := ioutil.ReadAll(targKey)
@@ -101,7 +106,7 @@ func Test0Dot1Migration(t *testing.T) {
 	require.Contains(t, targString, "gun: docker.com/notary0.1/samplerepo")
 	require.Contains(t, targString, "role: targets")
 	require.Equal(t, files[1].Name(), "a55ccf652b0be4b6c4d356cbb02d9ea432bb84a2571665be3df7c7396af8e8b8.key")
-	snapKey, err := os.OpenFile(filepath.Join(tmpDir, notary.PrivDir, "a55ccf652b0be4b6c4d356cbb02d9ea432bb84a2571665be3df7c7396af8e8b8.key"), os.O_RDONLY, notary.PrivExecPerms)
+	snapKey, err := os.Open(filepath.Join(tmpDir, notary.PrivDir, "a55ccf652b0be4b6c4d356cbb02d9ea432bb84a2571665be3df7c7396af8e8b8.key"))
 	require.NoError(t, err)
 	defer snapKey.Close()
 	snapBytes, _ := ioutil.ReadAll(snapKey)
@@ -109,7 +114,7 @@ func Test0Dot1Migration(t *testing.T) {
 	require.Contains(t, snapString, "gun: docker.com/notary0.1/samplerepo")
 	require.Contains(t, snapString, "role: snapshot")
 	require.Equal(t, files[2].Name(), "d0c623c8e70c70d42a8a8125c44a8598588b3f6e31d5c21a83cbc338dfde8a68.key")
-	rootKey, err := os.OpenFile(filepath.Join(tmpDir, notary.PrivDir, "d0c623c8e70c70d42a8a8125c44a8598588b3f6e31d5c21a83cbc338dfde8a68.key"), os.O_RDONLY, notary.PrivExecPerms)
+	rootKey, err := os.Open(filepath.Join(tmpDir, notary.PrivDir, "d0c623c8e70c70d42a8a8125c44a8598588b3f6e31d5c21a83cbc338dfde8a68.key"))
 	require.NoError(t, err)
 	defer rootKey.Close()
 	rootBytes, _ := ioutil.ReadAll(rootKey)
@@ -133,14 +138,14 @@ func Test0Dot3Migration(t *testing.T) {
 	ts := fullTestServer(t)
 	defer ts.Close()
 
-	_, err = NewFileCachedNotaryRepository(tmpDir, gun, ts.URL, http.DefaultTransport,
+	_, err = NewFileCachedRepository(tmpDir, gun, ts.URL, http.DefaultTransport,
 		passphrase.ConstantRetriever(passwd), trustpinning.TrustPinConfig{})
 	require.NoError(t, err, "error creating repo: %s", err)
 
 	// check that root_keys and tuf_keys are gone and that all corect keys are present and have the correct headers
 	files, _ := ioutil.ReadDir(filepath.Join(tmpDir, notary.PrivDir))
 	require.Equal(t, files[0].Name(), "041b64dab281324ef2b62fd2d04f4758269e120ff063b7bc78709272821a0a02.key")
-	targKey, err := os.OpenFile(filepath.Join(tmpDir, notary.PrivDir, "041b64dab281324ef2b62fd2d04f4758269e120ff063b7bc78709272821a0a02.key"), os.O_RDONLY, notary.PrivExecPerms)
+	targKey, err := os.Open(filepath.Join(tmpDir, notary.PrivDir, "041b64dab281324ef2b62fd2d04f4758269e120ff063b7bc78709272821a0a02.key"))
 	require.NoError(t, err)
 	defer targKey.Close()
 	targBytes, _ := ioutil.ReadAll(targKey)
@@ -148,7 +153,7 @@ func Test0Dot3Migration(t *testing.T) {
 	require.Contains(t, targString, "gun: docker.com/notary0.3/tst")
 	require.Contains(t, targString, "role: targets")
 	require.Equal(t, files[1].Name(), "85559599cf3cf681ff193f432a7ca6d128182bd1cfa8ede2c70761deac8bc2dc.key")
-	snapKey, err := os.OpenFile(filepath.Join(tmpDir, notary.PrivDir, "85559599cf3cf681ff193f432a7ca6d128182bd1cfa8ede2c70761deac8bc2dc.key"), os.O_RDONLY, notary.PrivExecPerms)
+	snapKey, err := os.Open(filepath.Join(tmpDir, notary.PrivDir, "85559599cf3cf681ff193f432a7ca6d128182bd1cfa8ede2c70761deac8bc2dc.key"))
 	require.NoError(t, err)
 	defer snapKey.Close()
 	snapBytes, _ := ioutil.ReadAll(snapKey)
@@ -156,7 +161,7 @@ func Test0Dot3Migration(t *testing.T) {
 	require.Contains(t, snapString, "gun: docker.com/notary0.3/tst")
 	require.Contains(t, snapString, "role: snapshot")
 	require.Equal(t, files[2].Name(), "f4eaf871a74aa3b3a0ff95cef2455a1e4d461639f5625418e76756fc5c948690.key")
-	rootKey, err := os.OpenFile(filepath.Join(tmpDir, notary.PrivDir, "f4eaf871a74aa3b3a0ff95cef2455a1e4d461639f5625418e76756fc5c948690.key"), os.O_RDONLY, notary.PrivExecPerms)
+	rootKey, err := os.Open(filepath.Join(tmpDir, notary.PrivDir, "f4eaf871a74aa3b3a0ff95cef2455a1e4d461639f5625418e76756fc5c948690.key"))
 	require.NoError(t, err)
 	defer rootKey.Close()
 	rootBytes, _ := ioutil.ReadAll(rootKey)
@@ -164,7 +169,7 @@ func Test0Dot3Migration(t *testing.T) {
 	require.Contains(t, rootString, "role: root")
 	require.NotContains(t, rootString, "gun")
 	require.Equal(t, files[3].Name(), "fa842f66cac2dc898677a8660789dcff0e3b0b93b73f8952491f6493199936d3.key")
-	delKey, err := os.OpenFile(filepath.Join(tmpDir, notary.PrivDir, "fa842f66cac2dc898677a8660789dcff0e3b0b93b73f8952491f6493199936d3.key"), os.O_RDONLY, notary.PrivExecPerms)
+	delKey, err := os.Open(filepath.Join(tmpDir, notary.PrivDir, "fa842f66cac2dc898677a8660789dcff0e3b0b93b73f8952491f6493199936d3.key"))
 	require.NoError(t, err)
 	defer delKey.Close()
 	delBytes, _ := ioutil.ReadAll(delKey)
@@ -176,6 +181,9 @@ func Test0Dot3Migration(t *testing.T) {
 
 // We can read and publish from notary0.1 repos
 func Test0Dot1RepoFormat(t *testing.T) {
+	if notary.FIPSEnabled() {
+		t.Skip("skip backward compatibility test in FIPS mode")
+	}
 	// make a temporary directory and copy the fixture into it, since updating
 	// and publishing will modify the files
 	tmpDir, err := ioutil.TempDir("", "notary-backwards-compat-test")
@@ -189,9 +197,10 @@ func Test0Dot1RepoFormat(t *testing.T) {
 	ts := fullTestServer(t)
 	defer ts.Close()
 
-	repo, err := NewFileCachedNotaryRepository(tmpDir, gun, ts.URL, http.DefaultTransport,
+	r, err := NewFileCachedRepository(tmpDir, gun, ts.URL, http.DefaultTransport,
 		passphrase.ConstantRetriever(passwd), trustpinning.TrustPinConfig{})
 	require.NoError(t, err, "error creating repo: %s", err)
+	repo := r.(*repository)
 
 	// targets should have 1 target, and it should be readable offline
 	targets, err := repo.ListTargets()
@@ -217,10 +226,10 @@ func Test0Dot1RepoFormat(t *testing.T) {
 	require.Len(t, targets, 2)
 
 	// Also check that we can add/remove keys by rotating keys
-	oldTargetsKeys := repo.CryptoService.ListKeys(data.CanonicalTargetsRole)
+	oldTargetsKeys := repo.GetCryptoService().ListKeys(data.CanonicalTargetsRole)
 	require.NoError(t, repo.RotateKey(data.CanonicalTargetsRole, false, nil))
 	require.NoError(t, repo.Publish())
-	newTargetsKeys := repo.CryptoService.ListKeys(data.CanonicalTargetsRole)
+	newTargetsKeys := repo.GetCryptoService().ListKeys(data.CanonicalTargetsRole)
 
 	require.Len(t, oldTargetsKeys, 1)
 	require.Len(t, newTargetsKeys, 1)
@@ -230,12 +239,15 @@ func Test0Dot1RepoFormat(t *testing.T) {
 	// and we can download the snapshot
 	require.NoError(t, repo.RotateKey(data.CanonicalSnapshotRole, true, nil))
 	require.NoError(t, repo.Publish())
-	err = repo.Update(false)
+	err = repo.updateTUF(false)
 	require.NoError(t, err)
 }
 
 // We can read and publish from notary0.3 repos
 func Test0Dot3RepoFormat(t *testing.T) {
+	if notary.FIPSEnabled() {
+		t.Skip("skip backward compatibility test in FIPS mode")
+	}
 	// make a temporary directory and copy the fixture into it, since updating
 	// and publishing will modify the files
 	tmpDir, err := ioutil.TempDir("", "notary-backwards-compat-test")
@@ -249,9 +261,10 @@ func Test0Dot3RepoFormat(t *testing.T) {
 	ts := fullTestServer(t)
 	defer ts.Close()
 
-	repo, err := NewFileCachedNotaryRepository(tmpDir, gun, ts.URL, http.DefaultTransport,
+	r, err := NewFileCachedRepository(tmpDir, gun, ts.URL, http.DefaultTransport,
 		passphrase.ConstantRetriever(passwd), trustpinning.TrustPinConfig{})
 	require.NoError(t, err, "error creating repo: %s", err)
+	repo := r.(*repository)
 
 	// targets should have 1 target, and it should be readable offline
 	targets, err := repo.ListTargets()
@@ -281,10 +294,10 @@ func Test0Dot3RepoFormat(t *testing.T) {
 	require.Equal(t, data.RoleName("targets/releases"), delegations[0].Name)
 
 	// Also check that we can add/remove keys by rotating keys
-	oldTargetsKeys := repo.CryptoService.ListKeys(data.CanonicalTargetsRole)
+	oldTargetsKeys := repo.GetCryptoService().ListKeys(data.CanonicalTargetsRole)
 	require.NoError(t, repo.RotateKey(data.CanonicalTargetsRole, false, nil))
 	require.NoError(t, repo.Publish())
-	newTargetsKeys := repo.CryptoService.ListKeys(data.CanonicalTargetsRole)
+	newTargetsKeys := repo.GetCryptoService().ListKeys(data.CanonicalTargetsRole)
 
 	require.Len(t, oldTargetsKeys, 1)
 	require.Len(t, newTargetsKeys, 1)
@@ -294,7 +307,7 @@ func Test0Dot3RepoFormat(t *testing.T) {
 	// and we can download the snapshot
 	require.NoError(t, repo.RotateKey(data.CanonicalSnapshotRole, true, nil))
 	require.NoError(t, repo.Publish())
-	err = repo.Update(false)
+	err = repo.updateTUF(false)
 	require.NoError(t, err)
 }
 
@@ -315,11 +328,12 @@ func TestDownloading0Dot1RepoFormat(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(repoDir)
 
-	repo, err := NewFileCachedNotaryRepository(repoDir, gun, ts.URL, http.DefaultTransport,
+	r, err := NewFileCachedRepository(repoDir, gun, ts.URL, http.DefaultTransport,
 		passphrase.ConstantRetriever(passwd), trustpinning.TrustPinConfig{})
 	require.NoError(t, err, "error creating repo: %s", err)
+	repo := r.(*repository)
 
-	err = repo.Update(true)
+	err = repo.updateTUF(true)
 	require.NoError(t, err, "error updating repo: %s", err)
 }
 
@@ -340,10 +354,11 @@ func TestDownloading0Dot3RepoFormat(t *testing.T) {
 	require.NoError(t, err)
 	defer os.RemoveAll(repoDir)
 
-	repo, err := NewFileCachedNotaryRepository(repoDir, gun, ts.URL, http.DefaultTransport,
+	r, err := NewFileCachedRepository(repoDir, gun, ts.URL, http.DefaultTransport,
 		passphrase.ConstantRetriever(passwd), trustpinning.TrustPinConfig{})
 	require.NoError(t, err, "error creating repo: %s", err)
+	repo := r.(*repository)
 
-	err = repo.Update(true)
+	err = repo.updateTUF(true)
 	require.NoError(t, err, "error updating repo: %s", err)
 }

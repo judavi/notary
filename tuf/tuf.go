@@ -8,11 +8,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sirupsen/logrus"
-	"github.com/docker/notary"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/signed"
-	"github.com/docker/notary/tuf/utils"
+	"github.com/sirupsen/logrus"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/signed"
+	"github.com/theupdateframework/notary/tuf/utils"
 )
 
 // ErrSigVerifyFail - signature verification failed
@@ -85,13 +85,13 @@ func (tr *Repo) AddBaseKeys(role data.RoleName, keys ...data.PublicKey) error {
 	if tr.Root == nil {
 		return ErrNotLoaded{Role: data.CanonicalRootRole}
 	}
-	ids := []string{}
+
 	for _, k := range keys {
 		// Store only the public portion
 		tr.Root.Signed.Keys[k.ID()] = k
 		tr.Root.Signed.Roles[role].KeyIDs = append(tr.Root.Signed.Roles[role].KeyIDs, k.ID())
-		ids = append(ids, k.ID())
 	}
+
 	tr.Root.Dirty = true
 
 	// also, whichever role was switched out needs to be re-signed
@@ -158,9 +158,7 @@ func (tr *Repo) RemoveBaseKeys(role data.RoleName, keyIDs ...string) error {
 			continue
 		}
 		for _, rk := range r.KeyIDs {
-			if _, ok := toDelete[rk]; ok {
-				delete(toDelete, rk)
-			}
+			delete(toDelete, rk)
 		}
 	}
 
@@ -248,17 +246,14 @@ func (tr *Repo) GetDelegationRole(name data.RoleName) (data.DelegationRole, erro
 				}
 				// Check all public key certificates in the role for expiry
 				// Currently we do not reject expired delegation keys but warn if they might expire soon or have already
-				for keyID, pubKey := range delgRole.Keys {
+				for _, pubKey := range delgRole.Keys {
 					certFromKey, err := utils.LoadCertFromPEM(pubKey.Public())
 					if err != nil {
 						continue
 					}
-					if err := utils.ValidateCertificate(certFromKey, true); err != nil {
-						if _, ok := err.(data.ErrCertExpired); !ok {
-							// do not allow other invalid cert errors
-							return err
-						}
-						logrus.Warnf("error with delegation %s key ID %d: %s", delgRole.Name, keyID, err)
+					//Don't check the delegation certificate expiry once added, use the TUF role expiry instead
+					if err := utils.ValidateCertificate(certFromKey, false); err != nil {
+						return err
 					}
 				}
 				foundRole = &delgRole
@@ -299,10 +294,9 @@ func (tr *Repo) GetAllLoadedRoles() []*data.Role {
 		})
 	}
 	for _, delegate := range tr.Targets {
-		for _, r := range delegate.Signed.Delegations.Roles {
-			res = append(res, r)
-		}
+		res = append(res, delegate.Signed.Delegations.Roles...)
 	}
+
 	return res
 }
 
@@ -823,7 +817,7 @@ func (tr *Repo) AddTargets(role data.RoleName, targets data.Files) (data.Files, 
 		}
 	}
 	if len(addedTargets) != len(targets) {
-		return nil, fmt.Errorf("Could not add all targets")
+		return nil, fmt.Errorf("could not add all targets")
 	}
 	return nil, nil
 }
@@ -942,10 +936,6 @@ func (tr *Repo) SignRoot(expires time.Time, extraSigningKeys data.KeyList) (*dat
 	tr.Root.Signatures = signed.Signatures
 	tr.originalRootRole = currRoot
 	return signed, nil
-}
-
-func oldRootVersionName(version int) string {
-	return fmt.Sprintf("%s.%v", data.CanonicalRootRole, version)
 }
 
 // SignTargets signs the targets file for the given top level or delegated targets role

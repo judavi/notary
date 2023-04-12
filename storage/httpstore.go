@@ -3,7 +3,7 @@
 // - Response bodies for error codes should be unmarshallable as:
 //   {"errors": [{..., "detail": <serialized validation error>}]}
 //   else validation error details, etc. will be unparsable.  The errors
-//   should have a github.com/docker/notary/tuf/validation/SerializableError
+//   should have a github.com/theupdateframework/notary/tuf/validation/SerializableError
 //   in the Details field.
 //   If writing your own server, please have a look at
 //   github.com/docker/distribution/registry/api/errcode
@@ -22,10 +22,17 @@ import (
 	"net/url"
 	"path"
 
-	"github.com/Sirupsen/logrus"
-	"github.com/docker/notary"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/validation"
+	"github.com/sirupsen/logrus"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/validation"
+)
+
+const (
+	// MaxErrorResponseSize is the maximum size for an error message - 1KiB
+	MaxErrorResponseSize int64 = 1 << 10
+	// MaxKeySize is the maximum size for a stored TUF key - 256KiB
+	MaxKeySize = 256 << 10
 )
 
 // ErrServerUnavailable indicates an error from the server. code allows us to
@@ -60,7 +67,7 @@ func (n NetworkError) Error() string {
 
 func (err ErrServerUnavailable) Error() string {
 	if err.code == 401 {
-		return fmt.Sprintf("you are not authorized to perform this operation: server returned 401.")
+		return "you are not authorized to perform this operation: server returned 401."
 	}
 	return fmt.Sprintf("unable to reach trust server at this time: %d.", err.code)
 }
@@ -104,7 +111,21 @@ type HTTPStore struct {
 	roundTrip     http.RoundTripper
 }
 
-// NewHTTPStore initializes a new store against a URL and a number of configuration options
+// NewNotaryServerStore returns a new HTTPStore against a URL which should represent a notary
+// server
+func NewNotaryServerStore(serverURL string, gun data.GUN, roundTrip http.RoundTripper) (RemoteStore, error) {
+	return NewHTTPStore(
+		serverURL+"/v2/"+gun.String()+"/_trust/tuf/",
+		"",
+		"json",
+		"key",
+		roundTrip,
+	)
+}
+
+// NewHTTPStore initializes a new store against a URL and a number of configuration options.
+//
+// In case of a nil `roundTrip`, a default offline store is used instead.
 func NewHTTPStore(baseURL, metaPrefix, metaExtension, keyExtension string, roundTrip http.RoundTripper) (RemoteStore, error) {
 	base, err := url.Parse(baseURL)
 	if err != nil {
@@ -126,7 +147,8 @@ func NewHTTPStore(baseURL, metaPrefix, metaExtension, keyExtension string, round
 }
 
 func tryUnmarshalError(resp *http.Response, defaultError error) error {
-	bodyBytes, err := ioutil.ReadAll(resp.Body)
+	b := io.LimitReader(resp.Body, MaxErrorResponseSize)
+	bodyBytes, err := ioutil.ReadAll(b)
 	if err != nil {
 		return defaultError
 	}
@@ -317,7 +339,8 @@ func (s HTTPStore) GetKey(role data.RoleName) ([]byte, error) {
 	if err := translateStatusToError(resp, role.String()+" key"); err != nil {
 		return nil, err
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	b := io.LimitReader(resp.Body, MaxKeySize)
+	body, err := ioutil.ReadAll(b)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +365,8 @@ func (s HTTPStore) RotateKey(role data.RoleName) ([]byte, error) {
 	if err := translateStatusToError(resp, role.String()+" key"); err != nil {
 		return nil, err
 	}
-	body, err := ioutil.ReadAll(resp.Body)
+	b := io.LimitReader(resp.Body, MaxKeySize)
+	body, err := ioutil.ReadAll(b)
 	if err != nil {
 		return nil, err
 	}
@@ -351,5 +375,5 @@ func (s HTTPStore) RotateKey(role data.RoleName) ([]byte, error) {
 
 // Location returns a human readable name for the storage location
 func (s HTTPStore) Location() string {
-	return s.baseURL.String()
+	return s.baseURL.Host
 }

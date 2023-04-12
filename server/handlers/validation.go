@@ -4,16 +4,16 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 
 	"github.com/docker/go/canonical/json"
-	"github.com/docker/notary/server/storage"
-	"github.com/docker/notary/trustpinning"
-	"github.com/docker/notary/tuf"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/signed"
-	"github.com/docker/notary/tuf/utils"
-	"github.com/docker/notary/tuf/validation"
+	"github.com/theupdateframework/notary/server/storage"
+	"github.com/theupdateframework/notary/trustpinning"
+	"github.com/theupdateframework/notary/tuf"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/signed"
+	"github.com/theupdateframework/notary/tuf/utils"
+	"github.com/theupdateframework/notary/tuf/validation"
 )
 
 // validateUpload checks that the updates being pushed
@@ -216,7 +216,7 @@ func generateTimestamp(gun data.GUN, builder tuf.RepoBuilder, store storage.Meta
 		// If we cannot sign the timestamp, then we don't have keys for the timestamp,
 		// and the client screwed up their root
 		return nil, validation.ErrBadRoot{
-			Msg: fmt.Sprintf("no  timestamp keys exist on the server"),
+			Msg: "no timestamp keys exist on the server",
 		}
 	default:
 		return nil, validation.ErrValidation{Msg: err.Error()}
@@ -228,8 +228,5 @@ func loadFromStore(gun data.GUN, roleName data.RoleName, builder tuf.RepoBuilder
 	if err != nil {
 		return err
 	}
-	if err := builder.Load(roleName, metaJSON, 1, true); err != nil {
-		return err
-	}
-	return nil
+	return builder.Load(roleName, metaJSON, 1, true)
 }

@@ -3,9 +3,9 @@ package rethinkdb
 import (
 	"time"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/docker/go-connections/tlsconfig"
-	"gopkg.in/dancannon/gorethink.v3"
+	"github.com/sirupsen/logrus"
+	gorethink "gopkg.in/rethinkdb/rethinkdb-go.v6"
 )
 
 // Timing can be embedded into other gorethink models to

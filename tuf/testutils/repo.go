@@ -3,25 +3,23 @@ package testutils
 import (
 	"fmt"
 	"sort"
-	"testing"
 	"time"
 
 	"github.com/docker/go/canonical/json"
-	"github.com/docker/notary/cryptoservice"
-	"github.com/docker/notary/passphrase"
-	"github.com/docker/notary/trustmanager"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/utils"
-	"github.com/stretchr/testify/require"
-
-	"github.com/docker/notary/tuf"
-	"github.com/docker/notary/tuf/signed"
+	"github.com/theupdateframework/notary/cryptoservice"
+	"github.com/theupdateframework/notary/passphrase"
+	"github.com/theupdateframework/notary/trustmanager"
+	"github.com/theupdateframework/notary/tuf"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/signed"
+	"github.com/theupdateframework/notary/tuf/testutils/keys"
+	"github.com/theupdateframework/notary/tuf/utils"
 )
 
 // CreateKey creates a new key inside the cryptoservice for the given role and gun,
 // returning the public key.  If the role is a root role, create an x509 key.
 func CreateKey(cs signed.CryptoService, gun data.GUN, role data.RoleName, keyAlgorithm string) (data.PublicKey, error) {
-	key, err := cs.Create(role, gun, keyAlgorithm)
+	key, err := keys.CreateOrAddKey(cs, role, gun, keyAlgorithm)
 	if err != nil {
 		return nil, err
 	}
@@ -53,16 +51,18 @@ func CreateKey(cs signed.CryptoService, gun data.GUN, role data.RoleName, keyAlg
 }
 
 // CopyKeys copies keys of a particular role to a new cryptoservice, and returns that cryptoservice
-func CopyKeys(t *testing.T, from signed.CryptoService, roles ...data.RoleName) signed.CryptoService {
+func CopyKeys(from signed.CryptoService, roles ...data.RoleName) (signed.CryptoService, error) {
 	memKeyStore := trustmanager.NewKeyMemoryStore(passphrase.ConstantRetriever("pass"))
 	for _, role := range roles {
 		for _, keyID := range from.ListKeys(role) {
 			key, _, err := from.GetPrivateKey(keyID)
-			require.NoError(t, err)
+			if err != nil {
+				return nil, err
+			}
 			memKeyStore.AddKey(trustmanager.KeyInfo{Role: role}, key)
 		}
 	}
-	return cryptoservice.NewCryptoService(memKeyStore)
+	return cryptoservice.NewCryptoService(memKeyStore), nil
 }
 
 // EmptyRepo creates an in memory crypto service
@@ -162,7 +162,7 @@ func SignAndSerialize(tufRepo *tuf.Repo) (map[data.RoleName][]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		metaBytes, err := json.MarshalCanonical(signedThing)
+		metaBytes, err := json.Marshal(signedThing)
 		if err != nil {
 			return nil, err
 		}

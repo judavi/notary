@@ -7,17 +7,17 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/Sirupsen/logrus"
 	"github.com/docker/distribution/health"
 	"github.com/docker/distribution/registry/api/errcode"
 	"github.com/docker/distribution/registry/auth"
-	"github.com/docker/notary/server/errors"
-	"github.com/docker/notary/server/handlers"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/signed"
-	"github.com/docker/notary/utils"
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/sirupsen/logrus"
+	"github.com/theupdateframework/notary/server/errors"
+	"github.com/theupdateframework/notary/server/handlers"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/signed"
+	"github.com/theupdateframework/notary/utils"
 	"golang.org/x/net/context"
 )
 
@@ -124,7 +124,7 @@ func CreateHandler(operationName string, serverHandler utils.ContextHandler, err
 		wrapped = utils.WrapWithCacheHandler(cacheControlConfig, wrapped)
 	}
 	wrapped = filterImagePrefixes(repoPrefixes, errorIfGUNInvalid, wrapped)
-	return prometheus.InstrumentHandlerWithOpts(prometheusOpts(operationName), wrapped)
+	return prometheus.InstrumentHandlerWithOpts(prometheusOpts(operationName), wrapped) //lint:ignore SA1019 TODO update prometheus API
 }
 
 // RootHandler returns the handler that routes all the paths from / for the
@@ -232,7 +232,7 @@ func RootHandler(ctx context.Context, ac auth.AccessController, trust signed.Cry
 		repoPrefixes,
 	))
 	r.Methods("GET").Path("/_notary_server/health").HandlerFunc(health.StatusHandler)
-	r.Methods("GET").Path("/metrics").Handler(prometheus.Handler())
+	r.Methods("GET").Path("/metrics").Handler(prometheus.Handler()) //lint:ignore SA1019 TODO update prometheus API
 	r.Methods("GET", "POST", "PUT", "HEAD", "DELETE").Path("/{other:.*}").Handler(
 		authWrapper(handlers.NotFoundHandler))
 

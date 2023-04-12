@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/docker/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/data"
 )
 
 // StrSliceContains checks if the given string appears in the slice
@@ -30,7 +30,7 @@ func RoleNameSliceContains(ss []data.RoleName, s data.RoleName) bool {
 	return false
 }
 
-// RoleNameSliceRemove removes the the given RoleName from the slice, returning a new slice
+// RoleNameSliceRemove removes the given RoleName from the slice, returning a new slice
 func RoleNameSliceRemove(ss []data.RoleName, s data.RoleName) []data.RoleName {
 	res := []data.RoleName{}
 	for _, v := range ss {

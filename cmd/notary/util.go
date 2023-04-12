@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 )
 
 const (
@@ -30,7 +31,7 @@ func getPayload(t *tufCommander) ([]byte, error) {
 	// Reads all of the data on STDIN
 	payload, err := ioutil.ReadAll(os.Stdin)
 	if err != nil {
-		return nil, fmt.Errorf("Error reading content from STDIN: %v", err)
+		return nil, fmt.Errorf("error reading content from STDIN: %w", err)
 	}
 	return payload, nil
 }
@@ -46,9 +47,18 @@ func feedback(t *tufCommander, payload []byte) error {
 
 	// Flag "quiet" was not "true", that's why we get here.
 	if t.output != "" {
-		return ioutil.WriteFile(t.output, payload, 0644)
+		return ioutil.WriteFile(t.output, payload, 0600)
 	}
 
 	os.Stdout.Write(payload)
 	return nil
+}
+
+// homeExpand will expand an initial ~ to the user home directory. This is supported for
+// config files where the shell will not have expanded paths.
+func homeExpand(homeDir, path string) string {
+	if path == "" || path[0] != '~' || (len(path) > 1 && path[1] != os.PathSeparator) {
+		return path
+	}
+	return filepath.Join(homeDir, path[1:])
 }

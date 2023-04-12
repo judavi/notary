@@ -1,6 +1,6 @@
 package signed
 
-import "github.com/docker/notary/tuf/data"
+import "github.com/theupdateframework/notary/tuf/data"
 
 // KeyService provides management of keys locally. It will never
 // accept or provide private keys. Communication between the KeyService
@@ -39,7 +39,7 @@ type CryptoService interface {
 	KeyService
 }
 
-// Verifier defines an interface for verfying signatures. An implementer
+// Verifier defines an interface for verifying signatures. An implementer
 // of this interface should verify signatures for one and only one
 // signing scheme.
 type Verifier interface {

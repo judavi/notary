@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Sirupsen/logrus"
+	"github.com/sirupsen/logrus"
 )
 
 // Canonical base role names
@@ -55,7 +55,7 @@ func (e ErrInvalidRole) Error() string {
 
 // ValidRole only determines the name is semantically
 // correct. For target delegated roles, it does NOT check
-// the the appropriate parent roles exist.
+// the appropriate parent roles exist.
 func ValidRole(name RoleName) bool {
 	if IsDelegation(name) {
 		return true

@@ -6,12 +6,12 @@ import (
 	"os"
 	"strings"
 
-	"github.com/docker/notary"
-	notaryclient "github.com/docker/notary/client"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/utils"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/theupdateframework/notary"
+	notaryclient "github.com/theupdateframework/notary/client"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/utils"
 )
 
 var cmdDelegationTemplate = usageTemplate{
@@ -83,12 +83,12 @@ func (d *delegationCommander) GetCommand() *cobra.Command {
 func (d *delegationCommander) delegationPurgeKeys(cmd *cobra.Command, args []string) error {
 	if len(args) != 1 {
 		cmd.Usage()
-		return fmt.Errorf("Please provide a single Global Unique Name as an argument to remove")
+		return fmt.Errorf("please provide a single Global Unique Name as an argument to remove")
 	}
 
 	if len(d.keyIDs) == 0 {
 		cmd.Usage()
-		return fmt.Errorf("Please provide at least one key ID to be removed using the --key flag")
+		return fmt.Errorf("please provide at least one key ID to be removed using the --key flag")
 	}
 
 	gun := data.GUN(args[0])
@@ -103,7 +103,7 @@ func (d *delegationCommander) delegationPurgeKeys(cmd *cobra.Command, args []str
 		return err
 	}
 
-	nRepo, err := notaryclient.NewFileCachedNotaryRepository(
+	nRepo, err := notaryclient.NewFileCachedRepository(
 		config.GetString("trust_dir"),
 		gun,
 		getRemoteTrustServer(config),
@@ -132,7 +132,7 @@ func (d *delegationCommander) delegationsList(cmd *cobra.Command, args []string)
 	if len(args) != 1 {
 		cmd.Usage()
 		return fmt.Errorf(
-			"Please provide a Global Unique Name as an argument to list")
+			"please provide a Global Unique Name as an argument to list")
 	}
 
 	config, err := d.configGetter()
@@ -153,7 +153,7 @@ func (d *delegationCommander) delegationsList(cmd *cobra.Command, args []string)
 	}
 
 	// initialize repo with transport to get latest state of the world before listing delegations
-	nRepo, err := notaryclient.NewFileCachedNotaryRepository(
+	nRepo, err := notaryclient.NewFileCachedRepository(
 		config.GetString("trust_dir"), gun, getRemoteTrustServer(config), rt, d.retriever, trustPin)
 	if err != nil {
 		return err
@@ -161,11 +161,11 @@ func (d *delegationCommander) delegationsList(cmd *cobra.Command, args []string)
 
 	delegationRoles, err := nRepo.GetDelegationRoles()
 	if err != nil {
-		return fmt.Errorf("Error retrieving delegation roles for repository %s: %v", gun, err)
+		return fmt.Errorf("error retrieving delegation roles for repository %s: %w", gun, err)
 	}
 
 	cmd.Println("")
-	prettyPrintRoles(delegationRoles, cmd.Out(), "delegations")
+	prettyPrintRoles(delegationRoles, cmd.OutOrStdout(), "delegations")
 	cmd.Println("")
 	return nil
 }
@@ -184,7 +184,7 @@ func (d *delegationCommander) delegationRemove(cmd *cobra.Command, args []string
 
 	// no online operations are performed by add so the transport argument
 	// should be nil
-	nRepo, err := notaryclient.NewFileCachedNotaryRepository(
+	nRepo, err := notaryclient.NewFileCachedRepository(
 		config.GetString("trust_dir"), gun, getRemoteTrustServer(config), nil, d.retriever, trustPin)
 	if err != nil {
 		return err
@@ -314,7 +314,7 @@ func (d *delegationCommander) delegationAdd(cmd *cobra.Command, args []string) e
 
 	// no online operations are performed by add so the transport argument
 	// should be nil
-	nRepo, err := notaryclient.NewFileCachedNotaryRepository(
+	nRepo, err := notaryclient.NewFileCachedRepository(
 		config.GetString("trust_dir"), gun, getRemoteTrustServer(config), nil, d.retriever, trustPin)
 	if err != nil {
 		return err

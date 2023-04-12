@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -11,15 +14,15 @@ import (
 	"github.com/gorilla/mux"
 	"golang.org/x/net/context"
 
-	"github.com/docker/notary"
-	"github.com/docker/notary/server/errors"
-	"github.com/docker/notary/server/snapshot"
-	"github.com/docker/notary/server/storage"
-	"github.com/docker/notary/server/timestamp"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/signed"
-	"github.com/docker/notary/tuf/validation"
-	"github.com/docker/notary/utils"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/server/errors"
+	"github.com/theupdateframework/notary/server/snapshot"
+	"github.com/theupdateframework/notary/server/storage"
+	"github.com/theupdateframework/notary/server/timestamp"
+	"github.com/theupdateframework/notary/tuf/data"
+	"github.com/theupdateframework/notary/tuf/signed"
+	"github.com/theupdateframework/notary/tuf/validation"
+	"github.com/theupdateframework/notary/utils"
 )
 
 // MainHandler is the default handler for the server
@@ -70,7 +73,12 @@ func atomicUpdateHandler(ctx context.Context, w http.ResponseWriter, r *http.Req
 		if err == io.EOF {
 			break
 		}
-		role := data.RoleName(strings.TrimSuffix(part.FileName(), ".json"))
+		_, params, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
+		if err != nil {
+			logger.Infof("400 POST error parsing Content-Disposition header: %s", err)
+			return errors.ErrNoFilename.WithDetail(nil)
+		}
+		role := data.RoleName(strings.TrimSuffix(params["filename"], ".json"))
 		if role.String() == "" {
 			logger.Info("400 POST empty role")
 			return errors.ErrNoFilename.WithDetail(nil)
@@ -114,7 +122,22 @@ func atomicUpdateHandler(ctx context.Context, w http.ResponseWriter, r *http.Req
 		logger.Errorf("500 POST error applying update request: %v", err)
 		return errors.ErrUpdating.WithDetail(nil)
 	}
+
+	logTS(logger, gun.String(), updates)
+
 	return nil
+}
+
+// logTS logs the timestamp update at Info level
+func logTS(logger ctxu.Logger, gun string, updates []storage.MetaUpdate) {
+	for _, update := range updates {
+		if update.Role == data.CanonicalTimestampRole {
+			checksumBin := sha256.Sum256(update.Data)
+			checksum := hex.EncodeToString(checksumBin[:])
+			logger.Infof("updated %s to timestamp version %d, checksum %s", gun, update.Version, checksum)
+			break
+		}
+	}
 }
 
 // GetHandler returns the json for a specified role and GUN.
@@ -174,6 +197,7 @@ func DeleteHandler(ctx context.Context, w http.ResponseWriter, r *http.Request) 
 		logger.Error("500 DELETE repository")
 		return errors.ErrUnknown.WithDetail(err)
 	}
+	logger.Infof("trust data deleted for %s", gun)
 	return nil
 }
 

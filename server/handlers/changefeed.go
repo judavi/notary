@@ -10,9 +10,9 @@ import (
 	"github.com/gorilla/mux"
 	"golang.org/x/net/context"
 
-	"github.com/docker/notary"
-	"github.com/docker/notary/server/errors"
-	"github.com/docker/notary/server/storage"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/server/errors"
+	"github.com/theupdateframework/notary/server/storage"
 )
 
 type changefeedResponse struct {
@@ -43,7 +43,12 @@ func Changefeed(ctx context.Context, w http.ResponseWriter, r *http.Request) err
 
 func changefeed(logger ctxu.Logger, store storage.MetaStore, gun, changeID string, records int64) ([]byte, error) {
 	changes, err := store.GetChanges(changeID, int(records), gun)
-	if err != nil {
+	switch err.(type) {
+	case nil:
+		// no error to return
+	case storage.ErrBadQuery:
+		return nil, errors.ErrInvalidParams.WithDetail(err)
+	default:
 		logger.Errorf("%d GET could not retrieve records: %s", http.StatusInternalServerError, err.Error())
 		return nil, errors.ErrUnknown.WithDetail(err)
 	}

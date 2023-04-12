@@ -13,6 +13,7 @@ import (
 	"crypto/sha512"
 	"crypto/x509"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"net/http"
@@ -25,21 +26,22 @@ import (
 
 	"encoding/json"
 
-	"github.com/Sirupsen/logrus"
 	ctxu "github.com/docker/distribution/context"
 	canonicaljson "github.com/docker/go/canonical/json"
-	"github.com/docker/notary"
-	"github.com/docker/notary/client"
-	"github.com/docker/notary/cryptoservice"
-	"github.com/docker/notary/passphrase"
-	"github.com/docker/notary/server"
-	"github.com/docker/notary/server/storage"
-	nstorage "github.com/docker/notary/storage"
-	"github.com/docker/notary/trustmanager"
-	"github.com/docker/notary/tuf/data"
-	"github.com/docker/notary/tuf/utils"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 	"github.com/stretchr/testify/require"
+	"github.com/theupdateframework/notary"
+	"github.com/theupdateframework/notary/client"
+	"github.com/theupdateframework/notary/cryptoservice"
+	"github.com/theupdateframework/notary/passphrase"
+	"github.com/theupdateframework/notary/server"
+	"github.com/theupdateframework/notary/server/storage"
+	nstorage "github.com/theupdateframework/notary/storage"
+	"github.com/theupdateframework/notary/trustmanager"
+	"github.com/theupdateframework/notary/tuf/data"
+	testutils "github.com/theupdateframework/notary/tuf/testutils/keys"
+	"github.com/theupdateframework/notary/tuf/utils"
 	"golang.org/x/net/context"
 )
 
@@ -111,7 +113,7 @@ func TestInitWithRootKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// if the key has a root role, AddKey sets the gun to "" so we have done the same here
-	encryptedPEMPrivKey, err := utils.EncryptPrivateKey(privKey, data.CanonicalRootRole, "", testPassphrase)
+	encryptedPEMPrivKey, err := utils.ConvertPrivateKeyToPKCS8(privKey, data.CanonicalRootRole, "", testPassphrase)
 	require.NoError(t, err)
 	encryptedPEMKeyFilename := filepath.Join(tempDir, "encrypted_key.key")
 	err = ioutil.WriteFile(encryptedPEMKeyFilename, encryptedPEMPrivKey, 0644)
@@ -146,7 +148,7 @@ func TestInitWithRootKey(t *testing.T) {
 	// check error if unencrypted PEM used
 	unencryptedPrivKey, err := utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
-	unencryptedPEMPrivKey, err := utils.KeyToPEM(unencryptedPrivKey, data.CanonicalRootRole, "")
+	unencryptedPEMPrivKey, err := utils.ConvertPrivateKeyToPKCS8(unencryptedPrivKey, data.CanonicalRootRole, "", "")
 	require.NoError(t, err)
 	unencryptedPEMKeyFilename := filepath.Join(tempDir, "unencrypted_key.key")
 	err = ioutil.WriteFile(unencryptedPEMKeyFilename, unencryptedPEMPrivKey, 0644)
@@ -161,7 +163,7 @@ func TestInitWithRootKey(t *testing.T) {
 	require.NoError(t, err)
 
 	// Blank gun name since it is a root key
-	badPassPEMPrivKey, err := utils.EncryptPrivateKey(badPassPrivKey, data.CanonicalRootRole, "", "bad_pass")
+	badPassPEMPrivKey, err := utils.ConvertPrivateKeyToPKCS8(badPassPrivKey, data.CanonicalRootRole, "", "bad_pass")
 	require.NoError(t, err)
 	badPassPEMKeyFilename := filepath.Join(tempDir, "badpass_key.key")
 	err = ioutil.WriteFile(badPassPEMKeyFilename, badPassPEMPrivKey, 0644)
@@ -173,7 +175,7 @@ func TestInitWithRootKey(t *testing.T) {
 	// check error if wrong role specified
 	snapshotPrivKey, err := utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
-	snapshotPEMPrivKey, err := utils.KeyToPEM(snapshotPrivKey, data.CanonicalSnapshotRole, "gun2")
+	snapshotPEMPrivKey, err := utils.ConvertPrivateKeyToPKCS8(snapshotPrivKey, data.CanonicalSnapshotRole, "gun2", "")
 	require.NoError(t, err)
 	snapshotPEMKeyFilename := filepath.Join(tempDir, "snapshot_key.key")
 	err = ioutil.WriteFile(snapshotPEMKeyFilename, snapshotPEMPrivKey, 0644)
@@ -181,6 +183,131 @@ func TestInitWithRootKey(t *testing.T) {
 
 	_, err = runCommand(t, tempDir, "-s", server.URL, "init", "gun2", "--rootkey", snapshotPEMKeyFilename)
 	require.Error(t, err, "Init with wrong role should error")
+}
+
+func TestInitWithRootCert(t *testing.T) {
+	setUp(t)
+
+	// key pairs
+	privStr := `-----BEGIN EC PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: AES-256-CBC,c9ccb4ef1effa1a080030c9c36942e8e
+role: root
+
+3pCHAMGD2QJDr8BAojd01wa4nzhct0Brk6olIAoaL9yRfV5jRguidu1UaoA22Tan
+9zOatIkxIgqkEP+P3+prIipbXJPbr9I9zVdWxhANSEhmQ95jmlk9syi/xeJT2oXB
+6+u84t59l0mRpuAisdC9AGkw7Cz2T5U51lhyCWjLDqE=
+-----END EC PRIVATE KEY-----`
+
+	certStr := `-----BEGIN CERTIFICATE-----
+MIIBWDCB/6ADAgECAhBKKoVsRNJdGsGh6tPWnE4rMAoGCCqGSM49BAMCMBMxETAP
+BgNVBAMTCGRvY2tlci8qMB4XDTE3MDQyODIwMTczMFoXDTI3MDQyNjIwMTczMFow
+EzERMA8GA1UEAxMIZG9ja2VyLyowWTATBgcqhkjOPQIBBggqhkjOPQMBBwNCAAQQ
+6RhA8sX/kWedbPPFzNqOMI+AnWOQV+u0+FQfeNO+k/Uf0LBnKhHEPSwSBuuwLPon
+w+nR0YTdv3lFaM7x9nOUozUwMzAOBgNVHQ8BAf8EBAMCBaAwEwYDVR0lBAwwCgYI
+KwYBBQUHAwMwDAYDVR0TAQH/BAIwADAKBggqhkjOPQQDAgNIADBFAiA+eHPInhLJ
+HgP8nha+UqdYgq8ZCOlhdGTJhSdHd4sCuQIhAPXqQeWhDLA3/Pf8B7G3ZwWpPbZ8
+adLwkjqoeEKMaAXf
+-----END CERTIFICATE-----`
+
+	nonMatchingKeyStr := `-----BEGIN EC PRIVATE KEY-----
+Proc-Type: 4,ENCRYPTED
+DEK-Info: AES-256-CBC,fd6e6735232efbc1a851549d12b8203d
+role: root
+
+Z6u+cAZOEmeoieyQHt6Lp8ZmLWPiyGXT0wTkfYMnGxZ+EX+6sBeu9CWgx+3kOCWQ
+qXuLmBjJ4ZwL/lZejeLLefF7jILA0oDLJtNH1L0oP7H/i7DUtNv+7Jvnci986Rx0
+i85wnaTwOgWv8n6q3tavmnIA/v2QqsTpmI+bhwrPNKQ=
+-----END EC PRIVATE KEY-----`
+
+	//set up notary server
+	server := setupServer()
+	defer server.Close()
+
+	//set up temp dir
+	tempDir := tempDirWithConfig(t, `{
+		"trust_pinning" : {
+			"disable_tofu" : false
+		}
+	}`)
+	defer os.RemoveAll(tempDir)
+
+	//test tempfile writable
+	tempFile, err := ioutil.TempFile("", "targetfile")
+	require.NoError(t, err)
+	tempFile.Close()
+	defer os.Remove(tempFile.Name())
+
+	gun := "docker/repoName"
+	privKeyFilename := filepath.Join(tempDir, "priv.key")
+	certFilename := filepath.Join(tempDir, "cert.pem")
+	nonMatchingKeyFilename := filepath.Join(tempDir, "nmkey.key")
+
+	//write key and cert to file
+	err = ioutil.WriteFile(privKeyFilename, []byte(privStr), 0644)
+	require.NoError(t, err)
+	err = ioutil.WriteFile(certFilename, []byte(certStr), 0644)
+	require.NoError(t, err)
+	err = ioutil.WriteFile(nonMatchingKeyFilename, []byte(nonMatchingKeyStr), 0644)
+	require.NoError(t, err)
+
+	//test init repo without --rootkey and --rootcert
+	output, err := runCommand(t, tempDir,
+		"-s", server.URL,
+		"init", gun+"1",
+		"--rootkey", privKeyFilename,
+		"--rootcert", certFilename)
+	require.NoError(t, err)
+	require.Contains(t, output, "Root key found")
+	// === no rootkey specified: look up in keystore ===
+	// this requires the previous test to inject private key in keystore
+	output, err = runCommand(t, tempDir,
+		"-s", server.URL,
+		"init", gun+"2",
+		"--rootcert", certFilename)
+	require.NoError(t, err)
+	require.Contains(t, output, "Root key found")
+
+	//add a file to repo
+	output, err = runCommand(t, tempDir,
+		"-s", server.URL,
+		"add", gun+"2",
+		"v1",
+		certFilename)
+	require.NoError(t, err)
+	require.Contains(t, output, "staged for next publish")
+
+	//publish repo
+	output, err = runCommand(t, tempDir,
+		"-s", server.URL,
+		"publish", gun+"2")
+	require.NoError(t, err)
+	require.Contains(t, output, "Successfully published changes")
+
+	// === test init with no argument to --rootcert ===
+	_, err = runCommand(t, tempDir,
+		"-s", server.URL,
+		"init", gun+"3",
+		"--rootkey", privKeyFilename,
+		"--rootcert")
+	require.Error(t, err, "--rootcert requires one or more argument")
+
+	// === test non matching key pairs ===
+	_, err = runCommand(t, tempDir,
+		"-s", server.URL,
+		"init", gun+"4",
+		"--rootkey", nonMatchingKeyFilename,
+		"--rootcert", certFilename)
+	require.Error(t, err, "should not be able to init a repository with mismatched key and cert")
+
+	// === test non existing path ===
+	_, err = runCommand(t, tempDir,
+		"-s", server.URL,
+		"init", gun+"5",
+		"--rootkey", nonMatchingKeyFilename,
+		"--rootcert", "fake/path/to/cert")
+	require.Error(t, err, "should not be able to init a repository with non-existent certificate path")
+
 }
 
 // Initializes a repo, adds a target, publishes the target, lists the target,
@@ -290,7 +417,7 @@ func TestClientTUFInteraction(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, output, target2)
 
-	// Check the file this was written to to inspect metadata
+	// Check the file this was written to inspect metadata
 	cache, err := nstorage.NewFileStore(
 		filepath.Join(tempDir, "tuf", filepath.FromSlash("gun"), "metadata"),
 		"json",
@@ -636,7 +763,7 @@ func TestClientTUFAddByHashInteraction(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, output, target4)
 
-	// Check the file this was written to to inspect metadata
+	// Check the file this was written to inspect metadata
 	cache, err := nstorage.NewFileStore(
 		filepath.Join(tempDir, "tuf", filepath.FromSlash("gun"), "metadata"),
 		"json",
@@ -1025,9 +1152,9 @@ func TestClientDelegationsPublishing(t *testing.T) {
 	tempFile.Close()
 	defer os.Remove(tempFile.Name())
 
-	privKeyBytesNoRole, err := utils.KeyToPEM(privKey, "", "")
+	privKeyBytesNoRole, err := utils.ConvertPrivateKeyToPKCS8(privKey, "", "", "")
 	require.NoError(t, err)
-	privKeyBytesWithRole, err := utils.KeyToPEM(privKey, "user", "")
+	privKeyBytesWithRole, err := utils.ConvertPrivateKeyToPKCS8(privKey, "user", "", "")
 	require.NoError(t, err)
 
 	// Set up targets for publishing
@@ -1457,7 +1584,7 @@ func TestKeyRotation(t *testing.T) {
 	// create encrypted root keys
 	rootPrivKey1, err := utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
-	encryptedPEMPrivKey1, err := utils.EncryptPrivateKey(rootPrivKey1, data.CanonicalRootRole, "", testPassphrase)
+	encryptedPEMPrivKey1, err := utils.ConvertPrivateKeyToPKCS8(rootPrivKey1, data.CanonicalRootRole, "", testPassphrase)
 	require.NoError(t, err)
 	encryptedPEMKeyFilename1 := filepath.Join(tempDir, "encrypted_key.key")
 	err = ioutil.WriteFile(encryptedPEMKeyFilename1, encryptedPEMPrivKey1, 0644)
@@ -1465,7 +1592,7 @@ func TestKeyRotation(t *testing.T) {
 
 	rootPrivKey2, err := utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
-	encryptedPEMPrivKey2, err := utils.EncryptPrivateKey(rootPrivKey2, data.CanonicalRootRole, "", testPassphrase)
+	encryptedPEMPrivKey2, err := utils.ConvertPrivateKeyToPKCS8(rootPrivKey2, data.CanonicalRootRole, "", testPassphrase)
 	require.NoError(t, err)
 	encryptedPEMKeyFilename2 := filepath.Join(tempDir, "encrypted_key2.key")
 	err = ioutil.WriteFile(encryptedPEMKeyFilename2, encryptedPEMPrivKey2, 0644)
@@ -1538,7 +1665,7 @@ func TestKeyRotationNonRoot(t *testing.T) {
 	privKey, err := utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes, err := utils.EncryptPrivateKey(privKey, data.CanonicalTargetsRole, "", testPassphrase)
+	pemBytes, err := utils.ConvertPrivateKeyToPKCS8(privKey, data.CanonicalTargetsRole, "", testPassphrase)
 	require.NoError(t, err)
 
 	nBytes, err := tempFile.Write(pemBytes)
@@ -1553,7 +1680,7 @@ func TestKeyRotationNonRoot(t *testing.T) {
 	privKey2, err := utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes2, err := utils.KeyToPEM(privKey2, data.CanonicalTargetsRole, "")
+	pemBytes2, err := utils.ConvertPrivateKeyToPKCS8(privKey2, data.CanonicalTargetsRole, "", "")
 	require.NoError(t, err)
 
 	nBytes2, err := tempFile2.Write(pemBytes2)
@@ -1600,12 +1727,12 @@ func TestLogLevelFlags(t *testing.T) {
 	// Test default to fatal
 	n := notaryCommander{}
 	n.setVerbosityLevel()
-	require.Equal(t, "fatal", logrus.GetLevel().String())
+	require.Equal(t, "warning", logrus.GetLevel().String())
 
 	// Test that verbose (-v) sets to error
 	n.verbose = true
 	n.setVerbosityLevel()
-	require.Equal(t, "error", logrus.GetLevel().String())
+	require.Equal(t, "info", logrus.GetLevel().String())
 
 	// Test that debug (-D) sets to debug
 	n.debug = true
@@ -1676,6 +1803,7 @@ func tempDirWithConfig(t *testing.T, config string) string {
 }
 
 func TestMain(m *testing.M) {
+	flag.Parse()
 	if testing.Short() {
 		// skip
 		os.Exit(0)
@@ -1948,7 +2076,7 @@ func generateCertPrivKeyPair(t *testing.T, gun, keyAlgorithm string) (*x509.Cert
 	case data.ECDSAKey:
 		privKey, err = utils.GenerateECDSAKey(rand.Reader)
 	case data.RSAKey:
-		privKey, err = utils.GenerateRSAKey(rand.Reader, 4096)
+		privKey, err = testutils.GetRSAKey(4096)
 	default:
 		err = fmt.Errorf("invalid key algorithm provided: %s", keyAlgorithm)
 	}
@@ -2381,7 +2509,7 @@ func TestClientKeyImport(t *testing.T) {
 	privKey, err := utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes, err := utils.EncryptPrivateKey(privKey, data.CanonicalRootRole, "", "")
+	pemBytes, err := utils.ConvertPrivateKeyToPKCS8(privKey, data.CanonicalRootRole, "", "")
 	require.NoError(t, err)
 
 	nBytes, err := tempFile.Write(pemBytes)
@@ -2409,7 +2537,7 @@ func TestClientKeyImport(t *testing.T) {
 	privKey, err = utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes, err = utils.EncryptPrivateKey(privKey, "", "", "")
+	pemBytes, err = utils.ConvertPrivateKeyToPKCS8(privKey, "", "", "")
 	require.NoError(t, err)
 
 	nBytes, err = tempFile2.Write(pemBytes)
@@ -2435,7 +2563,7 @@ func TestClientKeyImport(t *testing.T) {
 	privKey, err = utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes, err = utils.EncryptPrivateKey(privKey, "", "", "")
+	pemBytes, err = utils.ConvertPrivateKeyToPKCS8(privKey, "", "", "")
 	require.NoError(t, err)
 
 	nBytes, err = tempFile3.Write(pemBytes)
@@ -2450,7 +2578,7 @@ func TestClientKeyImport(t *testing.T) {
 	// if there is hardware available, root will only be on hardware, and not
 	// on disk
 	assertNumKeys(t, tempDir, 2, 1, !rootOnHardware())
-	file, err := os.OpenFile(filepath.Join(tempDir, notary.PrivDir, privKey.ID()+".key"), os.O_RDONLY, notary.PrivExecPerms)
+	file, err := os.Open(filepath.Join(tempDir, notary.PrivDir, privKey.ID()+".key"))
 	require.NoError(t, err)
 	filebytes, _ := ioutil.ReadAll(file)
 	require.Contains(t, string(filebytes), ("role: " + notary.DefaultImportRole))
@@ -2465,7 +2593,7 @@ func TestClientKeyImport(t *testing.T) {
 	privKey, err = utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes, err = utils.EncryptPrivateKey(privKey, "", "", "")
+	pemBytes, err = utils.ConvertPrivateKeyToPKCS8(privKey, "", "", "")
 	require.NoError(t, err)
 
 	nBytes, err = tempFile4.Write(pemBytes)
@@ -2480,7 +2608,7 @@ func TestClientKeyImport(t *testing.T) {
 	// if there is hardware available, root will only be on hardware, and not
 	// on disk
 	assertNumKeys(t, tempDir, 2, 2, !rootOnHardware())
-	file, err = os.OpenFile(filepath.Join(tempDir, notary.PrivDir, privKey.ID()+".key"), os.O_RDONLY, notary.PrivExecPerms)
+	file, err = os.Open(filepath.Join(tempDir, notary.PrivDir, privKey.ID()+".key"))
 	require.NoError(t, err)
 	filebytes, _ = ioutil.ReadAll(file)
 	require.Contains(t, string(filebytes), ("role: " + "somerole"))
@@ -2496,7 +2624,7 @@ func TestClientKeyImport(t *testing.T) {
 	privKey, err = utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes, err = utils.EncryptPrivateKey(privKey, "", "", "")
+	pemBytes, err = utils.ConvertPrivateKeyToPKCS8(privKey, "", "", "")
 	require.NoError(t, err)
 
 	nBytes, err = tempFile5.Write(pemBytes)
@@ -2511,7 +2639,7 @@ func TestClientKeyImport(t *testing.T) {
 	// if there is hardware available, root will only be on hardware, and not
 	// on disk
 	assertNumKeys(t, tempDir, 2, 3, !rootOnHardware())
-	file, err = os.OpenFile(filepath.Join(tempDir, notary.PrivDir, privKey.ID()+".key"), os.O_RDONLY, notary.PrivExecPerms)
+	file, err = os.Open(filepath.Join(tempDir, notary.PrivDir, privKey.ID()+".key"))
 	require.NoError(t, err)
 	filebytes, _ = ioutil.ReadAll(file)
 	require.Contains(t, string(filebytes), ("role: " + data.CanonicalSnapshotRole.String()))
@@ -2527,7 +2655,7 @@ func TestClientKeyImport(t *testing.T) {
 	privKey, err = utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes, err = utils.EncryptPrivateKey(privKey, data.CanonicalRootRole, "", testPassphrase)
+	pemBytes, err = utils.ConvertPrivateKeyToPKCS8(privKey, data.CanonicalRootRole, "", testPassphrase)
 	require.NoError(t, err)
 
 	nBytes, err = tempFile6.Write(pemBytes)
@@ -2537,7 +2665,7 @@ func TestClientKeyImport(t *testing.T) {
 
 	// import the key
 	_, err = runCommand(t, tempDir, "key", "import", tempFile6.Name())
-	require.NoError(t, err)
+	require.EqualError(t, err, "failed to import all keys: invalid key pem block")
 
 	// if there is hardware available, root will only be on hardware, and not
 	// on disk
@@ -2553,7 +2681,7 @@ func TestClientKeyImport(t *testing.T) {
 	privKey, err = utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes, err = utils.EncryptPrivateKey(privKey, "", "", "")
+	pemBytes, err = utils.ConvertPrivateKeyToPKCS8(privKey, "", "", "")
 	require.NoError(t, err)
 
 	nBytes, err = tempFile7.Write(pemBytes)
@@ -2568,7 +2696,7 @@ func TestClientKeyImport(t *testing.T) {
 	// if there is hardware available, root will only be on hardware, and not
 	// on disk
 	assertNumKeys(t, tempDir, 2, 4, !rootOnHardware())
-	file, err = os.OpenFile(filepath.Join(tempDir, notary.PrivDir, privKey.ID()+".key"), os.O_RDONLY, notary.PrivExecPerms)
+	file, err = os.Open(filepath.Join(tempDir, notary.PrivDir, privKey.ID()+".key"))
 	require.NoError(t, err)
 	filebytes, _ = ioutil.ReadAll(file)
 	require.Contains(t, string(filebytes), ("role: " + "somerole"))
@@ -2583,7 +2711,7 @@ func TestClientKeyImport(t *testing.T) {
 	privKey, err = utils.GenerateECDSAKey(rand.Reader)
 	require.NoError(t, err)
 
-	pemBytes, err = utils.EncryptPrivateKey(privKey, data.CanonicalSnapshotRole, "", "")
+	pemBytes, err = utils.ConvertPrivateKeyToPKCS8(privKey, data.CanonicalSnapshotRole, "", "")
 	require.NoError(t, err)
 
 	nBytes, err = tempFile8.Write(pemBytes)
@@ -2594,7 +2722,7 @@ func TestClientKeyImport(t *testing.T) {
 
 	// import the key
 	_, err = runCommand(t, tempDir, "key", "import", tempFile8.Name())
-	require.NoError(t, err)
+	require.EqualError(t, err, "failed to import all keys: invalid key pem block")
 
 	// if there is hardware available, root will only be on hardware, and not
 	// on disk
@@ -2616,7 +2744,7 @@ func TestAddDelImportKeyPublishFlow(t *testing.T) {
 	tempFile, err := ioutil.TempFile("", "pemfile")
 	require.NoError(t, err)
 
-	privKey, err := utils.GenerateRSAKey(rand.Reader, 2048)
+	privKey, err := testutils.GetRSAKey(2048)
 	require.NoError(t, err)
 	startTime := time.Now()
 	endTime := startTime.AddDate(10, 0, 0)
@@ -2627,7 +2755,7 @@ func TestAddDelImportKeyPublishFlow(t *testing.T) {
 	keyFile, err := ioutil.TempFile("", "pemfile")
 	require.NoError(t, err)
 	defer os.Remove(keyFile.Name())
-	pemBytes, err := utils.EncryptPrivateKey(privKey, "", "", "")
+	pemBytes, err := utils.ConvertPrivateKeyToPKCS8(privKey, "", "", "")
 	require.NoError(t, err)
 	nBytes, err := keyFile.Write(pemBytes)
 	require.NoError(t, err)
@@ -2792,7 +2920,7 @@ func TestExportImportFlow(t *testing.T) {
 	require.NoError(t, err)
 
 	// make sure the export has been done properly
-	from, err := os.OpenFile(filepath.Join(tempDir, "exported"), os.O_RDONLY, notary.PrivExecPerms)
+	from, err := os.Open(filepath.Join(tempDir, "exported"))
 	require.NoError(t, err)
 	defer from.Close()
 	fromBytes, _ := ioutil.ReadAll(from)
@@ -2803,7 +2931,7 @@ func TestExportImportFlow(t *testing.T) {
 
 	// now setup new filestore
 	newTempDir := tempDirWithConfig(t, "{}")
-	defer os.Remove(newTempDir)
+	defer os.RemoveAll(newTempDir)
 
 	// and new server
 	newServer := setupServer()
@@ -2831,7 +2959,7 @@ func TestExportImportFlow(t *testing.T) {
 
 	if !rootOnHardware() {
 		// validate root is imported correctly
-		rootKey, err := os.OpenFile(filepath.Join(newTempDir, notary.PrivDir, root[0]+".key"), os.O_RDONLY, notary.PrivExecPerms)
+		rootKey, err := os.Open(filepath.Join(newTempDir, notary.PrivDir, root[0]+".key"))
 		require.NoError(t, err)
 		defer rootKey.Close()
 		rootBytes, _ := ioutil.ReadAll(rootKey)
@@ -2842,7 +2970,7 @@ func TestExportImportFlow(t *testing.T) {
 	}
 
 	// validate snapshot is imported correctly
-	snapKey, err := os.OpenFile(filepath.Join(newTempDir, notary.PrivDir, signing[0]+".key"), os.O_RDONLY, notary.PrivExecPerms)
+	snapKey, err := os.Open(filepath.Join(newTempDir, notary.PrivDir, signing[0]+".key"))
 	require.NoError(t, err)
 	defer snapKey.Close()
 	snapBytes, _ := ioutil.ReadAll(snapKey)
@@ -2851,7 +2979,7 @@ func TestExportImportFlow(t *testing.T) {
 	require.True(t, strings.Contains(snapString, "role: snapshot") || strings.Contains(snapString, "role: target"))
 
 	// validate targets is imported correctly
-	targKey, err := os.OpenFile(filepath.Join(newTempDir, notary.PrivDir, signing[1]+".key"), os.O_RDONLY, notary.PrivExecPerms)
+	targKey, err := os.Open(filepath.Join(newTempDir, notary.PrivDir, signing[1]+".key"))
 	require.NoError(t, err)
 	defer targKey.Close()
 	targBytes, _ := ioutil.ReadAll(targKey)
@@ -2869,18 +2997,18 @@ func TestDelegationKeyImportExport(t *testing.T) {
 	defer os.RemoveAll(tempDir)
 
 	tempExportedDir := tempDirWithConfig(t, "{}")
-	defer os.RemoveAll(tempDir)
+	defer os.RemoveAll(tempExportedDir)
 
 	tempImportingDir := tempDirWithConfig(t, "{}")
-	defer os.RemoveAll(tempDir)
+	defer os.RemoveAll(tempImportingDir)
 
 	// Setup key in a file for import
 	keyFile, err := ioutil.TempFile("", "pemfile")
 	require.NoError(t, err)
 	defer os.Remove(keyFile.Name())
-	privKey, err := utils.GenerateRSAKey(rand.Reader, 2048)
+	privKey, err := testutils.GetRSAKey(2048)
 	require.NoError(t, err)
-	pemBytes, err := utils.EncryptPrivateKey(privKey, "", "", "")
+	pemBytes, err := utils.ConvertPrivateKeyToPKCS8(privKey, "", "", "")
 	require.NoError(t, err)
 	nBytes, err := keyFile.Write(pemBytes)
 	require.NoError(t, err)
