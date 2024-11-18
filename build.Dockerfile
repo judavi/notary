@@ -1,4 +1,4 @@
-FROM golang:1.17.13-alpine3.16 as builder-base
+FROM golang:1.20.4-alpine3.16 as builder-base
 RUN apk add make bash git openssh build-base curl
 
 #
