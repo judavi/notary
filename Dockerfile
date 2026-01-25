@@ -1,4 +1,4 @@
-FROM golang:1.17.13
+FROM golang:latest
 
 RUN apt-get update && apt-get install -y \
 	curl \
